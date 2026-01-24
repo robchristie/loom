@@ -1,8 +1,8 @@
 # Tasks: bootstrap-agentic-sdlc-v1
 
 - [ ] 1. Add Python project skeleton for SDLC engine (uv)
-  - [ ] add `pyproject.toml` (or extend existing) with Pydantic v2 + Typer (or argparse)
-  - [ ] add `sdlc/` package and `sdlc` console entry
+  - [ ] add `pyproject.toml` (or extend existing) with Pydantic v2 + Typer
+  - [ ] add `src/sdlc/` package and `sdlc` console entry
 - [ ] 2. Implement normative Pydantic v2 models for v1 artifacts (exactly as spec)
 - [ ] 3. Implement `sdlc schema export --out sdlc/schemas/` (JSON Schema export)
 - [ ] 4. Implement canonical JSON hashing (sorted keys, SHA-256)
