@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 import typer
 from pydantic import ValidationError
@@ -22,6 +23,27 @@ from .models import Actor, RunPhase, schema_registry
 
 
 app = typer.Typer(add_completion=False)
+
+
+def _phase_for_transition(transition: str) -> RunPhase:
+    """
+    Best-effort mapping from requested transition to RunPhase for journaling.
+    Keeps journal compliant with the Loom spec rule that phase reflects where the
+    request sits in the lifecycle (plan/implement/verify).
+    """
+    match = re.match(r"^\s*([^-\s>]+)\s*->\s*([^-\s>]+)\s*$", transition)
+    if not match:
+        return RunPhase.implement
+    to_status = match.group(2).strip()
+
+    if to_status in {"sized", "ready"}:
+        return RunPhase.plan
+    if to_status in {"in_progress", "verification_pending"}:
+        return RunPhase.implement
+    if to_status in {"verified", "approval_pending", "done"}:
+        return RunPhase.verify
+
+    return RunPhase.implement
 
 
 @app.command()
@@ -68,7 +90,8 @@ def request(bead_id: str, transition: str) -> None:
     paths = Paths(Path.cwd())
     actor = Actor(kind="system", name="sdlc")
     result = request_transition(paths, bead_id, transition, actor)
-    record_transition_attempt(paths, bead_id, RunPhase.implement, actor, transition, result)
+    phase = _phase_for_transition(transition)
+    record_transition_attempt(paths, bead_id, phase, actor, transition, result)
     if not result.ok:
         raise typer.Exit(code=1)
 
@@ -135,5 +158,8 @@ def grounding_generate(bead_id: str) -> None:
 def approve(bead_id: str, summary: str = typer.Option(..., "--summary")) -> None:
     paths = Paths(Path.cwd())
     actor = Actor(kind="human", name="sdlc")
+    if not summary.startswith("APPROVAL:"):
+        typer.echo('Summary must start with "APPROVAL:"')
+        raise typer.Exit(code=2)
     entry = create_approval_entry(bead_id, summary, actor)
     append_decision_entry(paths, entry)

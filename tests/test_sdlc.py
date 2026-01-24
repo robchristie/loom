@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
+import typer
 from pydantic import ValidationError
 
 from sdlc.codec import sha256_canonical_json
@@ -12,6 +14,7 @@ from sdlc.models import (
     Actor,
     AcceptanceCheck,
     Bead,
+    RunPhase,
     BeadStatus,
     BeadType,
     EvidenceBundle,
@@ -19,6 +22,7 @@ from sdlc.models import (
     EvidenceStatus,
     EvidenceType,
 )
+from sdlc.cli import approve, request
 
 
 def _now() -> datetime:
@@ -161,3 +165,44 @@ def test_illegal_transition_record_shape(tmp_path: Path) -> None:
     assert record.applied_transition is None
     assert record.phase == RunPhase.plan
     assert record.notes_md
+
+
+def test_request_records_phase_from_transition(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from sdlc.io import Paths, write_model
+
+    monkeypatch.chdir(tmp_path)
+    paths = Paths(Path.cwd())
+
+    bead_id = "work-abc123"
+    bead = Bead(
+        schema_name="sdlc.bead",
+        schema_version=1,
+        artifact_id=bead_id,
+        created_at=_now(),
+        created_by=Actor(kind="system", name="tester"),
+        bead_id=bead_id,
+        title="Test",
+        bead_type=BeadType.implementation,
+        status=BeadStatus.draft,
+        requirements_md="req",
+        acceptance_criteria_md="acc",
+        context_md="ctx",
+        acceptance_checks=[],
+    )
+    write_model(paths.bead_path(bead_id), bead)
+
+    request(bead_id, "draft -> sized")
+
+    journal_path = paths.runs_dir / "journal.jsonl"
+    lines = journal_path.read_text(encoding="utf-8").splitlines()
+    assert lines, "journal.jsonl should have at least one entry"
+    last = json.loads(lines[-1])
+    assert last["phase"] == RunPhase.plan.value
+    assert last["requested_transition"] == "draft -> sized"
+
+
+def test_approve_requires_prefix(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(typer.Exit) as exc:
+        approve("work-abc123", summary="Looks good to me")
+    assert exc.value.exit_code == 2
