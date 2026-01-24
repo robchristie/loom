@@ -1,4 +1,3 @@
 # LOOM
 
-## Agentic Software Development
-
+## Agentic Software Development Life Cycle (SDLC)
