@@ -397,6 +397,201 @@ def test_request_records_phase_from_transition(tmp_path: Path, monkeypatch: pyte
     assert last["requested_transition"] == "draft -> sized"
 
 
+def test_exception_profile_links_decision_on_start(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from sdlc.io import Paths, load_decision_ledger, load_execution_records, write_model
+
+    monkeypatch.chdir(tmp_path)
+    paths = Paths(Path.cwd())
+    bead_id = "work-abc123"
+    bead = Bead(
+        schema_name="sdlc.bead",
+        schema_version=1,
+        artifact_id=bead_id,
+        created_at=_now(),
+        created_by=Actor(kind="system", name="tester"),
+        bead_id=bead_id,
+        title="Test",
+        bead_type=BeadType.discovery,
+        status=BeadStatus.ready,
+        requirements_md="req",
+        acceptance_criteria_md="acc",
+        context_md="ctx",
+        acceptance_checks=[],
+        execution_profile="exception",
+    )
+    review = BeadReview(
+        schema_name="sdlc.bead_review",
+        schema_version=1,
+        artifact_id="review-abc123",
+        created_at=_now(),
+        created_by=Actor(kind="human", name="reviewer"),
+        bead_id=bead_id,
+        effort_bucket=EffortBucket.M,
+        tightened_acceptance_checks=bead.acceptance_checks,
+    )
+    grounding = GroundingBundle(
+        schema_name="sdlc.grounding_bundle",
+        schema_version=1,
+        artifact_id="grounding-work-abc123",
+        created_at=_now(),
+        created_by=Actor(kind="system", name="tester"),
+        bead_id=bead_id,
+        items=[],
+        allowed_commands=[],
+        disallowed_commands=[],
+        excluded_paths=[],
+    )
+    write_model(paths.bead_path(bead_id), bead)
+    write_model(paths.bead_dir(bead_id) / "bead_review.json", review)
+    write_model(paths.grounding_path(bead_id), grounding)
+
+    from sdlc.engine import append_decision_entry, _write_ready_acceptance_snapshot
+
+    _write_ready_acceptance_snapshot(paths, bead)
+    decision = DecisionLedgerEntry(
+        schema_name="sdlc.decision_ledger_entry",
+        schema_version=1,
+        artifact_id="decision-exc-abc123",
+        created_at=_now(),
+        created_by=Actor(kind="human", name="approver"),
+        bead_id=bead_id,
+        decision_type=DecisionType.exception,
+        summary="Exception granted",
+    )
+    append_decision_entry(paths, decision)
+
+    request(bead_id, "ready -> in_progress", actor_kind="human", actor_name="tester")
+
+    records = load_execution_records(paths)
+    assert records
+    last = records[-1]
+    assert last.applied_transition == "ready -> in_progress"
+    assert any(
+        link.artifact_id == decision.artifact_id and link.artifact_type == "decision_ledger_entry"
+        for link in last.links
+    )
+    assert list(load_decision_ledger(paths))
+
+
+def test_approval_links_decision_on_done(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from sdlc.io import Paths, load_execution_records, write_model
+    from sdlc.engine import record_transition_attempt, request_transition
+
+    monkeypatch.chdir(tmp_path)
+    paths = Paths(Path.cwd())
+    bead_id = "work-abc123"
+    actor = Actor(kind="human", name="tester")
+    bead = Bead(
+        schema_name="sdlc.bead",
+        schema_version=1,
+        artifact_id=bead_id,
+        created_at=_now(),
+        created_by=Actor(kind="system", name="tester"),
+        bead_id=bead_id,
+        title="Test",
+        bead_type=BeadType.discovery,
+        status=BeadStatus.approval_pending,
+        requirements_md="req",
+        acceptance_criteria_md="acc",
+        context_md="ctx",
+        acceptance_checks=[],
+    )
+    write_model(paths.bead_path(bead_id), bead)
+
+    from sdlc.engine import append_decision_entry
+
+    decision = DecisionLedgerEntry(
+        schema_name="sdlc.decision_ledger_entry",
+        schema_version=1,
+        artifact_id="decision-appr-abc123",
+        created_at=_now(),
+        created_by=Actor(kind="human", name="approver"),
+        bead_id=bead_id,
+        decision_type=DecisionType.approval,
+        summary="APPROVAL: ok",
+    )
+    append_decision_entry(paths, decision)
+
+    result = request_transition(paths, bead_id, "approval_pending -> done", actor)
+    assert result.ok
+    record_transition_attempt(
+        paths, bead_id, RunPhase.verify, actor, "approval_pending -> done", result
+    )
+
+    records = load_execution_records(paths)
+    assert records
+    last = records[-1]
+    assert last.applied_transition == "approval_pending -> done"
+    assert any(
+        link.artifact_id == decision.artifact_id and link.artifact_type == "decision_ledger_entry"
+        for link in last.links
+    )
+
+
+def test_exception_profile_requires_decision_and_no_applied_transition(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from sdlc.io import Paths, load_execution_records, write_model
+
+    monkeypatch.chdir(tmp_path)
+    paths = Paths(Path.cwd())
+    bead_id = "work-abc123"
+    bead = Bead(
+        schema_name="sdlc.bead",
+        schema_version=1,
+        artifact_id=bead_id,
+        created_at=_now(),
+        created_by=Actor(kind="system", name="tester"),
+        bead_id=bead_id,
+        title="Test",
+        bead_type=BeadType.discovery,
+        status=BeadStatus.ready,
+        requirements_md="req",
+        acceptance_criteria_md="acc",
+        context_md="ctx",
+        acceptance_checks=[],
+        execution_profile="exception",
+    )
+    review = BeadReview(
+        schema_name="sdlc.bead_review",
+        schema_version=1,
+        artifact_id="review-abc123",
+        created_at=_now(),
+        created_by=Actor(kind="human", name="reviewer"),
+        bead_id=bead_id,
+        effort_bucket=EffortBucket.M,
+        tightened_acceptance_checks=bead.acceptance_checks,
+    )
+    grounding = GroundingBundle(
+        schema_name="sdlc.grounding_bundle",
+        schema_version=1,
+        artifact_id="grounding-work-abc123",
+        created_at=_now(),
+        created_by=Actor(kind="system", name="tester"),
+        bead_id=bead_id,
+        items=[],
+        allowed_commands=[],
+        disallowed_commands=[],
+        excluded_paths=[],
+    )
+    write_model(paths.bead_path(bead_id), bead)
+    write_model(paths.bead_dir(bead_id) / "bead_review.json", review)
+    write_model(paths.grounding_path(bead_id), grounding)
+
+    from sdlc.engine import _write_ready_acceptance_snapshot
+
+    _write_ready_acceptance_snapshot(paths, bead)
+
+    with pytest.raises(typer.Exit):
+        request(bead_id, "ready -> in_progress", actor_kind="human", actor_name="tester")
+
+    records = load_execution_records(paths)
+    assert records
+    last = records[-1]
+    assert last.applied_transition is None
+
 def test_approve_allows_non_prefixed_summary(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

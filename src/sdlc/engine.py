@@ -25,6 +25,7 @@ from .io import (
 from .models import (
     AcceptanceCheck,
     Actor,
+    ArtifactLink,
     Bead,
     BeadReview,
     BeadStatus,
@@ -198,15 +199,8 @@ def _spec_gate(paths: Paths, bead: Bead) -> Optional[str]:
 def _execution_profile_gate(paths: Paths, bead: Bead) -> Optional[str]:
     if bead.execution_profile != ExecutionProfile.exception:
         return None
-    for entry in load_decision_ledger(paths):
-        if entry.decision_type != DecisionType.exception:
-            continue
-        if entry.bead_id != bead.bead_id:
-            continue
-        if entry.expires_at is not None and entry.expires_at <= now_utc():
-            continue
-        if entry.summary.strip():
-            return None
+    if find_active_exception_decision(paths, bead.bead_id) is not None:
+        return None
     return "Execution profile exception requires DecisionLedgerEntry"
 
 
@@ -226,15 +220,8 @@ def _evidence_gate(paths: Paths, bead: Bead) -> Optional[str]:
 
 
 def _approval_gate(paths: Paths, bead: Bead) -> Optional[str]:
-    for entry in load_decision_ledger(paths):
-        if entry.decision_type != DecisionType.approval:
-            continue
-        if entry.bead_id != bead.bead_id:
-            continue
-        if entry.created_by.kind != "human":
-            continue
-        if entry.summary.strip():
-            return None
+    if find_approval_decision(paths, bead.bead_id) is not None:
+        return None
     return "Approval DecisionLedgerEntry missing"
 
 
@@ -374,6 +361,7 @@ def build_execution_record(
     notes_md: Optional[str] = None,
     git: Optional[GitRef] = None,
     produced_artifacts: Optional[list[FileRef]] = None,
+    links: Optional[list[ArtifactLink]] = None,
 ) -> ExecutionRecord:
     return ExecutionRecord(
         artifact_id=f"exec-{bead_id}-{int(now_utc().timestamp())}",
@@ -387,6 +375,7 @@ def build_execution_record(
         applied_transition=applied_transition,
         git=git,
         produced_artifacts=produced_artifacts or [],
+        links=links or [],
         schema_name="sdlc.execution_record",
         schema_version=1,
     )
@@ -635,6 +624,41 @@ def append_decision_entry(paths: Paths, entry: DecisionLedgerEntry) -> None:
     write_decision_entry(paths, entry)
 
 
+def find_active_exception_decision(
+    paths: Paths, bead_id: str
+) -> Optional[DecisionLedgerEntry]:
+    most_recent: Optional[DecisionLedgerEntry] = None
+    now = now_utc()
+    for entry in load_decision_ledger(paths):
+        if entry.decision_type != DecisionType.exception:
+            continue
+        if entry.bead_id != bead_id:
+            continue
+        if entry.expires_at is not None and entry.expires_at <= now:
+            continue
+        if not entry.summary.strip():
+            continue
+        if most_recent is None or entry.created_at > most_recent.created_at:
+            most_recent = entry
+    return most_recent
+
+
+def find_approval_decision(paths: Paths, bead_id: str) -> Optional[DecisionLedgerEntry]:
+    most_recent: Optional[DecisionLedgerEntry] = None
+    for entry in load_decision_ledger(paths):
+        if entry.decision_type != DecisionType.approval:
+            continue
+        if entry.bead_id != bead_id:
+            continue
+        if entry.created_by.kind != "human":
+            continue
+        if not entry.summary.strip():
+            continue
+        if most_recent is None or entry.created_at > most_recent.created_at:
+            most_recent = entry
+    return most_recent
+
+
 def record_transition_attempt(
     paths: Paths,
     bead_id: str,
@@ -642,9 +666,37 @@ def record_transition_attempt(
     actor: Actor,
     requested: str,
     result: TransitionResult,
+    extra_links: Optional[list[ArtifactLink]] = None,
 ) -> ExecutionRecord:
     phase_value = result.phase or phase
     git_ref = GitRef(head_before=git_head(paths), dirty_before=git_is_dirty(paths))
+    links: list[ArtifactLink] = list(extra_links) if extra_links else []
+    if result.ok and result.applied_transition:
+        transition = result.applied_transition.strip()
+        if transition == "ready -> in_progress":
+            bead = load_bead(paths, bead_id)
+            if bead.execution_profile == ExecutionProfile.exception:
+                entry = find_active_exception_decision(paths, bead_id)
+                if entry is not None:
+                    links.append(
+                        ArtifactLink(
+                            artifact_type="decision_ledger_entry",
+                            artifact_id=entry.artifact_id,
+                            schema_name="sdlc.decision_ledger_entry",
+                            schema_version=1,
+                        )
+                    )
+        elif transition == "approval_pending -> done":
+            entry = find_approval_decision(paths, bead_id)
+            if entry is not None:
+                links.append(
+                    ArtifactLink(
+                        artifact_type="decision_ledger_entry",
+                        artifact_id=entry.artifact_id,
+                        schema_name="sdlc.decision_ledger_entry",
+                        schema_version=1,
+                    )
+                )
     record = build_execution_record(
         bead_id,
         phase_value,
@@ -654,6 +706,7 @@ def record_transition_attempt(
         exit_code=0 if result.ok else 1,
         notes_md=result.notes or None,
         git=git_ref,
+        links=links,
     )
     write_execution_record(paths, record)
     return record
