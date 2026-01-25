@@ -9,7 +9,7 @@ import typer
 from pydantic import ValidationError
 
 from sdlc.codec import sha256_canonical_json
-from sdlc.engine import acceptance_coverage_errors, canonical_hash_for_model
+from sdlc.engine import acceptance_coverage_errors, build_execution_record, canonical_hash_for_model
 from sdlc.cli import app
 from sdlc.models import (
     Actor,
@@ -29,10 +29,12 @@ from sdlc.models import (
     BeadReview,
     GroundingBundle,
     HashRef,
+    FileRef,
+    GitRef,
     OpenSpecRef,
     OpenSpecState,
 )
-from sdlc.cli import approve, request
+from sdlc.cli import approve, evidence_validate, openspec_sync, request
 
 
 def _now() -> datetime:
@@ -395,11 +397,19 @@ def test_request_records_phase_from_transition(tmp_path: Path, monkeypatch: pyte
     assert last["requested_transition"] == "draft -> sized"
 
 
-def test_approve_requires_prefix(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_approve_allows_non_prefixed_summary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from sdlc.io import Paths, load_decision_ledger
+
     monkeypatch.chdir(tmp_path)
-    with pytest.raises(typer.Exit) as exc:
-        approve("work-abc123", summary="Looks good to me")
-    assert exc.value.exit_code == 2
+    approve("work-abc123", summary="Looks good to me")
+    captured = capsys.readouterr()
+    assert 'Warning: summary should start with "APPROVAL:"' in captured.err
+    entries = list(load_decision_ledger(Paths(Path.cwd())))
+    assert entries
+    assert entries[-1].decision_type == DecisionType.approval
+    assert entries[-1].created_by.kind == "human"
 
 
 def test_authority_blocks_system_only_transition_for_human(tmp_path: Path) -> None:
@@ -875,6 +885,118 @@ def test_full_flow_smoke(tmp_path: Path) -> None:
     assert records[-1].applied_transition == "approval_pending -> done"
 
 
+def test_evidence_validate_records_git_and_artifacts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from sdlc.io import Paths, load_execution_records, write_model
+
+    monkeypatch.chdir(tmp_path)
+    paths = Paths(Path.cwd())
+    bead_id = "work-abc123"
+    bead = Bead(
+        schema_name="sdlc.bead",
+        schema_version=1,
+        artifact_id=bead_id,
+        created_at=_now(),
+        created_by=Actor(kind="system", name="tester"),
+        bead_id=bead_id,
+        title="Test",
+        bead_type=BeadType.implementation,
+        status=BeadStatus.verification_pending,
+        requirements_md="req",
+        acceptance_criteria_md="acc",
+        context_md="ctx",
+        acceptance_checks=[AcceptanceCheck(name="cmd", command="run", expect_exit_code=0)],
+    )
+    evidence = EvidenceBundle(
+        schema_name="sdlc.evidence_bundle",
+        schema_version=1,
+        artifact_id="evidence-abc123",
+        created_at=_now(),
+        created_by=Actor(kind="system", name="tester"),
+        bead_id=bead_id,
+        status=EvidenceStatus.collected,
+        for_bead_hash=canonical_hash_for_model(bead),
+        items=[EvidenceItem(name="cmd", evidence_type=EvidenceType.test_run, command="run", exit_code=0)],
+    )
+    write_model(paths.bead_path(bead_id), bead)
+    write_model(paths.evidence_path(bead_id), evidence)
+
+    evidence_validate(bead_id)
+    records = load_execution_records(paths)
+    assert records
+    last = records[-1]
+    assert last.phase == RunPhase.verify
+    assert last.produced_artifacts
+    assert any(ref.path == f"runs/{bead_id}/evidence.json" for ref in last.produced_artifacts)
+    assert last.git is not None
+    assert last.git.head_before is None or isinstance(last.git.head_before, str)
+
+
+def test_evidence_invalidation_uses_validation_git_ref(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from sdlc.engine import invalidate_evidence_if_stale
+    from sdlc.io import Paths, load_execution_records, write_execution_record, write_model
+
+    monkeypatch.chdir(tmp_path)
+    paths = Paths(Path.cwd())
+    bead_id = "work-abc123"
+    actor = Actor(kind="system", name="tester")
+    bead = Bead(
+        schema_name="sdlc.bead",
+        schema_version=1,
+        artifact_id=bead_id,
+        created_at=_now(),
+        created_by=actor,
+        bead_id=bead_id,
+        title="Test",
+        bead_type=BeadType.implementation,
+        status=BeadStatus.verification_pending,
+        requirements_md="req",
+        acceptance_criteria_md="acc",
+        context_md="ctx",
+        acceptance_checks=[],
+    )
+    evidence = EvidenceBundle(
+        schema_name="sdlc.evidence_bundle",
+        schema_version=1,
+        artifact_id="evidence-abc123",
+        created_at=_now(),
+        created_by=actor,
+        bead_id=bead_id,
+        status=EvidenceStatus.validated,
+        for_bead_hash=canonical_hash_for_model(bead),
+        items=[],
+    )
+    write_model(paths.bead_path(bead_id), bead)
+    write_model(paths.evidence_path(bead_id), evidence)
+
+    validation_record = build_execution_record(
+        bead_id,
+        RunPhase.verify,
+        actor,
+        exit_code=0,
+        git=GitRef(head_before="old-head", dirty_before=False),
+        produced_artifacts=[FileRef(path=f"runs/{bead_id}/evidence.json")],
+    )
+    write_execution_record(paths, validation_record)
+
+    monkeypatch.setattr("sdlc.engine.git_head", lambda _: "new-head")
+    monkeypatch.setattr("sdlc.engine.git_is_dirty", lambda _: False)
+
+    reason = invalidate_evidence_if_stale(paths, bead_id, actor)
+    assert reason is not None
+    assert "git head changed" in reason
+
+    evidence_after = EvidenceBundle.model_validate_json(
+        paths.evidence_path(bead_id).read_text(encoding="utf-8")
+    )
+    assert evidence_after.status == EvidenceStatus.invalidated
+    records = load_execution_records(paths)
+    assert records[-1].exit_code == 1
+
+
 def test_start_rejected_when_dependency_not_done(tmp_path: Path) -> None:
     from sdlc.io import Paths, write_model
     from sdlc.engine import request_transition
@@ -1127,3 +1249,48 @@ def test_spec_gate_rejects_openspec_ref_mismatch(tmp_path: Path) -> None:
     result = request_transition(paths, bead_id, "ready -> in_progress", actor)
     assert not result.ok
     assert "OpenSpecRef mismatch" in result.notes
+
+
+def test_openspec_sync_writes_runs_openspec_ref(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from sdlc.io import Paths, write_model
+
+    monkeypatch.chdir(tmp_path)
+    paths = Paths(Path.cwd())
+    bead_id = "work-abc123"
+    bead = Bead(
+        schema_name="sdlc.bead",
+        schema_version=1,
+        artifact_id=bead_id,
+        created_at=_now(),
+        created_by=Actor(kind="system", name="tester"),
+        bead_id=bead_id,
+        title="Test",
+        bead_type=BeadType.implementation,
+        status=BeadStatus.ready,
+        requirements_md="req",
+        acceptance_criteria_md="acc",
+        context_md="ctx",
+        acceptance_checks=[],
+        openspec_ref=ArtifactLink(artifact_type="openspec_ref", artifact_id="openspec-abc123"),
+    )
+    write_model(paths.bead_path(bead_id), bead)
+
+    ref_dir = paths.repo_root / "openspec" / "refs"
+    ref_dir.mkdir(parents=True, exist_ok=True)
+    openspec_ref = OpenSpecRef(
+        schema_name="sdlc.openspec_ref",
+        schema_version=1,
+        artifact_id="openspec-abc123",
+        created_at=_now(),
+        created_by=Actor(kind="human", name="tester"),
+        change_id="add-thing",
+        state=OpenSpecState.approved,
+        path="openspec/changes/add-thing",
+    )
+    write_model(ref_dir / "openspec-abc123.json", openspec_ref)
+
+    openspec_sync(bead_id)
+    out_path = paths.bead_dir(bead_id) / "openspec_ref.json"
+    assert out_path.exists()
+    loaded = OpenSpecRef.model_validate_json(out_path.read_text(encoding="utf-8"))
+    assert loaded.artifact_id == "openspec-abc123"

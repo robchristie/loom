@@ -37,6 +37,7 @@ from .models import (
     EvidenceType,
     ExecutionProfile,
     ExecutionRecord,
+    FileRef,
     GitRef,
     GroundingBundle,
     HashRef,
@@ -372,6 +373,7 @@ def build_execution_record(
     exit_code: Optional[int] = None,
     notes_md: Optional[str] = None,
     git: Optional[GitRef] = None,
+    produced_artifacts: Optional[list[FileRef]] = None,
 ) -> ExecutionRecord:
     return ExecutionRecord(
         artifact_id=f"exec-{bead_id}-{int(now_utc().timestamp())}",
@@ -384,6 +386,7 @@ def build_execution_record(
         requested_transition=requested_transition,
         applied_transition=applied_transition,
         git=git,
+        produced_artifacts=produced_artifacts or [],
         schema_name="sdlc.execution_record",
         schema_version=1,
     )
@@ -546,15 +549,34 @@ def invalidate_evidence_if_stale(paths: Paths, bead_id: str, actor: Actor) -> Op
 
     head = git_head(paths)
     dirty = git_is_dirty(paths)
-    last_record = None
+    validation_record = None
+    expected_artifact_path = f"runs/{bead_id}/evidence.json"
     for record in reversed(load_execution_records(paths)):
-        if record.bead_id == bead_id:
-            last_record = record
-            break
-    if last_record and last_record.git:
-        if head is not None and last_record.git.head_before and last_record.git.head_before != head:
+        if record.bead_id != bead_id:
+            continue
+        if record.phase != RunPhase.verify:
+            continue
+        if record.exit_code != 0:
+            continue
+        if not any(ref.path == expected_artifact_path for ref in record.produced_artifacts):
+            continue
+        if record.git is None:
+            continue
+        validation_record = record
+        break
+
+    if validation_record and validation_record.git:
+        if (
+            head is not None
+            and validation_record.git.head_before
+            and validation_record.git.head_before != head
+        ):
             reasons.append("git head changed")
-        if dirty is not None and last_record.git.dirty_before is not None and last_record.git.dirty_before != dirty:
+        if (
+            dirty is not None
+            and validation_record.git.dirty_before is not None
+            and validation_record.git.dirty_before != dirty
+        ):
             reasons.append("git dirty state changed")
 
     if not reasons:
@@ -571,6 +593,7 @@ def invalidate_evidence_if_stale(paths: Paths, bead_id: str, actor: Actor) -> Op
         applied_transition=None,
         exit_code=1,
         notes_md=f"Evidence invalidated: {evidence.invalidated_reason}",
+        git=GitRef(head_before=head, dirty_before=dirty),
     )
     write_execution_record(paths, record)
     return evidence.invalidated_reason

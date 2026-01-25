@@ -19,8 +19,8 @@ from .engine import (
     request_transition,
     validate_evidence_bundle,
 )
-from .io import Paths, load_bead, load_evidence, write_model
-from .models import Actor, RunPhase, schema_registry
+from .io import Paths, git_head, git_is_dirty, load_bead, load_evidence, write_model
+from .models import Actor, FileRef, GitRef, OpenSpecRef, RunPhase, schema_registry
 
 
 app = typer.Typer(add_completion=False)
@@ -117,6 +117,8 @@ app.add_typer(schema_app, name="schema")
 
 grounding_app = typer.Typer(add_completion=False)
 app.add_typer(grounding_app, name="grounding")
+openspec_app = typer.Typer(add_completion=False)
+app.add_typer(openspec_app, name="openspec")
 
 
 @evidence_app.command("collect")
@@ -136,6 +138,7 @@ def evidence_validate(bead_id: str) -> None:
     if evidence and evidence.created_by.kind == "human":
         actor = evidence.created_by
     evidence, errors = validate_evidence_bundle(paths, bead_id, actor, mark_validated=True)
+    git_ref = GitRef(head_before=git_head(paths), dirty_before=git_is_dirty(paths))
     record = build_execution_record(
         bead_id,
         RunPhase.verify,
@@ -144,6 +147,8 @@ def evidence_validate(bead_id: str) -> None:
         applied_transition=None,
         exit_code=0 if not errors else 1,
         notes_md="; ".join(errors) if errors else None,
+        git=git_ref,
+        produced_artifacts=[FileRef(path=f"runs/{bead_id}/evidence.json")],
     )
     from .io import write_execution_record
 
@@ -173,8 +178,32 @@ def grounding_generate(bead_id: str) -> None:
 def approve(bead_id: str, summary: str = typer.Option(..., "--summary")) -> None:
     paths = Paths(Path.cwd())
     actor = Actor(kind="human", name="sdlc")
-    if not summary.startswith("APPROVAL:"):
-        typer.echo('Summary must start with "APPROVAL:"')
+    if not summary.strip():
+        typer.echo("Summary must be non-empty")
         raise typer.Exit(code=2)
+    if not summary.startswith("APPROVAL:"):
+        typer.echo('Warning: summary should start with "APPROVAL:"', err=True)
     entry = create_approval_entry(bead_id, summary, actor)
     append_decision_entry(paths, entry)
+
+
+@openspec_app.command("sync")
+def openspec_sync(bead_id: str) -> None:
+    paths = Paths(Path.cwd())
+    bead = load_bead(paths, bead_id)
+    if bead.openspec_ref is None:
+        typer.echo("Bead.openspec_ref missing")
+        raise typer.Exit(code=2)
+    artifact_id = bead.openspec_ref.artifact_id
+    ref_path = paths.repo_root / "openspec" / "refs" / f"{artifact_id}.json"
+    if not ref_path.exists():
+        typer.echo(f"OpenSpecRef artifact not found: {ref_path}")
+        raise typer.Exit(code=2)
+    try:
+        ref = OpenSpecRef.model_validate_json(ref_path.read_text(encoding="utf-8"))
+    except ValidationError as exc:
+        typer.echo(f"OpenSpecRef invalid: {exc}")
+        raise typer.Exit(code=2)
+    out_path = paths.bead_dir(bead_id) / "openspec_ref.json"
+    write_model(out_path, ref)
+    typer.echo(str(out_path))

@@ -160,6 +160,8 @@ decision_ledger.jsonl
 
 For bead `<bead_id>`:
 
+ * `runs/<bead_id>/bead.json` → `Bead` (when Loom-managed)
+ * `runs/<bead_id>/bead_review.json` → `BeadReview`
  * `runs/<bead_id>/grounding.json` → `GroundingBundle`
  * `runs/<bead_id>/evidence.json` → `EvidenceBundle`
  * `runs/journal.jsonl` → `ExecutionRecord` entries
@@ -448,7 +450,7 @@ A bead MUST NOT transition to `done` unless there exists a `DecisionLedgerEntry`
 The lifecycle engine MUST link this approval entry from the `done` transition `ExecutionRecord` via `ExecutionRecord.links`.
 
 **Recommended convention (Non-normative)**
-`summary` SHOULD start with `APPROVAL:` for grepability.
+`summary` SHOULD start with `APPROVAL:` for grepability (recommended, not required).
 
 ---
 
