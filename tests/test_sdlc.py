@@ -263,3 +263,77 @@ def test_authority_blocks_system_only_transition_for_human(tmp_path: Path) -> No
     result = request_transition(paths, bead_id, "verification_pending -> verified", actor)
     assert result.ok is False
     assert "Authority violation" in result.notes
+
+
+def test_validate_evidence_requires_expected_exit_code_not_zero(tmp_path: Path) -> None:
+    from sdlc.io import Paths, write_model
+    from sdlc.engine import validate_evidence_bundle
+
+    paths = Paths(tmp_path)
+    bead_id = "work-abc123"
+    bead = Bead(
+        schema_name="sdlc.bead",
+        schema_version=1,
+        artifact_id=bead_id,
+        created_at=_now(),
+        created_by=Actor(kind="system", name="tester"),
+        bead_id=bead_id,
+        title="Test",
+        bead_type=BeadType.implementation,
+        status=BeadStatus.verification_pending,
+        requirements_md="req",
+        acceptance_criteria_md="acc",
+        context_md="ctx",
+        acceptance_checks=[AcceptanceCheck(name="cmd", command="run", expect_exit_code=2)],
+    )
+    evidence = EvidenceBundle(
+        schema_name="sdlc.evidence_bundle",
+        schema_version=1,
+        artifact_id="evidence-abc123",
+        created_at=_now(),
+        created_by=Actor(kind="system", name="tester"),
+        bead_id=bead_id,
+        status=EvidenceStatus.collected,
+        items=[EvidenceItem(name="cmd", evidence_type=EvidenceType.test_run, command="run", exit_code=0)],
+    )
+    write_model(paths.bead_path(bead_id), bead)
+    write_model(paths.evidence_path(bead_id), evidence)
+    _, errors = validate_evidence_bundle(paths, bead_id, Actor(kind="system", name="tester"))
+    assert any("expected 2" in error for error in errors)
+
+
+def test_validate_evidence_allows_nonzero_expected_exit_code(tmp_path: Path) -> None:
+    from sdlc.io import Paths, write_model
+    from sdlc.engine import validate_evidence_bundle
+
+    paths = Paths(tmp_path)
+    bead_id = "work-abc123"
+    bead = Bead(
+        schema_name="sdlc.bead",
+        schema_version=1,
+        artifact_id=bead_id,
+        created_at=_now(),
+        created_by=Actor(kind="system", name="tester"),
+        bead_id=bead_id,
+        title="Test",
+        bead_type=BeadType.implementation,
+        status=BeadStatus.verification_pending,
+        requirements_md="req",
+        acceptance_criteria_md="acc",
+        context_md="ctx",
+        acceptance_checks=[AcceptanceCheck(name="cmd", command="run", expect_exit_code=2)],
+    )
+    evidence = EvidenceBundle(
+        schema_name="sdlc.evidence_bundle",
+        schema_version=1,
+        artifact_id="evidence-abc123",
+        created_at=_now(),
+        created_by=Actor(kind="system", name="tester"),
+        bead_id=bead_id,
+        status=EvidenceStatus.collected,
+        items=[EvidenceItem(name="cmd", evidence_type=EvidenceType.test_run, command="run", exit_code=2)],
+    )
+    write_model(paths.bead_path(bead_id), bead)
+    write_model(paths.evidence_path(bead_id), evidence)
+    _, errors = validate_evidence_bundle(paths, bead_id, Actor(kind="system", name="tester"))
+    assert not errors
