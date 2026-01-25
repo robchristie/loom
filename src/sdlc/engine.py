@@ -395,7 +395,7 @@ def evidence_validation_errors(
     for check in bead.acceptance_checks:
         if getattr(check, "kind", "command") != "command":
             continue
-        item = next((candidate for candidate in evidence.items if candidate.command == check.command), None)
+        item = _find_item_for_check(evidence, check)
         if item is None:
             errors.append(f"Missing evidence for command check '{check.name}'")
             continue
@@ -409,6 +409,17 @@ def evidence_validation_errors(
             )
 
     return errors
+
+
+def _find_item_for_check(evidence: EvidenceBundle, check: AcceptanceCheck) -> Optional[EvidenceItem]:
+    for item in evidence.items:
+        if item.name == check.name:
+            return item
+    if check.kind == "command" and check.command:
+        for item in evidence.items:
+            if item.command == check.command:
+                return item
+    return None
 
 
 def acceptance_coverage_errors(

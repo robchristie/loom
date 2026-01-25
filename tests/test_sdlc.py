@@ -458,6 +458,62 @@ def test_evidence_validate_allows_nonzero_expected_exit_code(tmp_path: Path) -> 
     assert not errors
 
 
+def test_evidence_validation_prefers_name_over_command(tmp_path: Path) -> None:
+    from sdlc.io import Paths, write_model
+    from sdlc.engine import validate_evidence_bundle, canonical_hash_for_model
+
+    paths = Paths(tmp_path)
+    bead_id = "work-abc123"
+    bead = Bead(
+        schema_name="sdlc.bead",
+        schema_version=1,
+        artifact_id=bead_id,
+        created_at=_now(),
+        created_by=Actor(kind="system", name="tester"),
+        bead_id=bead_id,
+        title="Test",
+        bead_type=BeadType.implementation,
+        status=BeadStatus.verification_pending,
+        requirements_md="req",
+        acceptance_criteria_md="acc",
+        context_md="ctx",
+        acceptance_checks=[
+            AcceptanceCheck(name="cmd-ok", command="run", expect_exit_code=0),
+            AcceptanceCheck(name="cmd-fail", command="run", expect_exit_code=2),
+        ],
+    )
+    evidence = EvidenceBundle(
+        schema_name="sdlc.evidence_bundle",
+        schema_version=1,
+        artifact_id="evidence-abc123",
+        created_at=_now(),
+        created_by=Actor(kind="system", name="tester"),
+        bead_id=bead_id,
+        status=EvidenceStatus.collected,
+        for_bead_hash=canonical_hash_for_model(bead),
+        items=[
+            EvidenceItem(
+                name="cmd-ok",
+                evidence_type=EvidenceType.test_run,
+                command="run",
+                exit_code=0,
+            ),
+            EvidenceItem(
+                name="cmd-fail",
+                evidence_type=EvidenceType.test_run,
+                command="run",
+                exit_code=2,
+            ),
+        ],
+    )
+    write_model(paths.bead_path(bead_id), bead)
+    write_model(paths.evidence_path(bead_id), evidence)
+    evidence_after, errors = validate_evidence_bundle(paths, bead_id, Actor(kind="system", name="tester"))
+    assert evidence_after is not None
+    assert evidence_after.status == EvidenceStatus.validated
+    assert not errors
+
+
 def test_evidence_validate_rejects_bead_hash_mismatch(tmp_path: Path) -> None:
     from sdlc.io import Paths, write_model
     from sdlc.engine import validate_evidence_bundle
