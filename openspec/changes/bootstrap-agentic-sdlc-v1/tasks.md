@@ -1,32 +1,32 @@
 # Tasks: bootstrap-agentic-sdlc-v1
 
-- [ ] 1. Add Python project skeleton for SDLC engine (uv)
-  - [ ] add `pyproject.toml` (or extend existing) with Pydantic v2 + Typer
-  - [ ] add `src/sdlc/` package and `sdlc` console entry
-- [ ] 2. Implement normative Pydantic v2 models for v1 artifacts (exactly as spec)
-- [ ] 3. Implement `sdlc schema export --out sdlc/schemas/` (JSON Schema export)
-- [ ] 4. Implement canonical JSON hashing (sorted keys, SHA-256)
-- [ ] 5. Implement `sdlc validate <path>` (strict validation; extra=forbid)
-- [ ] 6. Implement append-only journal writer:
-  - [ ] `runs/journal.jsonl` (ExecutionRecord)
-  - [ ] `decision_ledger.jsonl` (DecisionLedgerEntry)
-- [ ] 7. Implement transition engine:
-  - [ ] enforce transition table + gates
-  - [ ] success and rejection both emit ExecutionRecord
-  - [ ] enforce "Bead artifact_id == bead_id"
-  - [ ] enforce acceptance check freeze after ready
-- [ ] 8. Implement evidence commands:
-  - [ ] `sdlc evidence collect <bead_id>` (skeleton from acceptance checks)
-  - [ ] `sdlc evidence validate <bead_id>` (Evidence Validation Rule)
-  - [ ] `sdlc evidence invalidate-if-stale <bead_id>`
-- [ ] 9. Implement `sdlc grounding generate <bead_id>` (heuristic; best-effort)
-- [ ] 10. Implement `sdlc approve <bead_id> --summary ...` writes approval DecisionLedgerEntry
-- [ ] 11. Tests (pytest):
-  - [ ] schema validation
-  - [ ] hashing determinism
-  - [ ] illegal transition rejection recording fields
-  - [ ] manual_check constraints
-  - [ ] acceptance coverage rule
-- [ ] 12. Docs: `docs/sdlc_quickstart.md`
-  - [ ] commands using `uv run sdlc ...`
-  - [ ] example flow for one bead end-to-end
+- [x] 1. Add Python project skeleton for SDLC engine (uv)
+  - [x] add `pyproject.toml` (or extend existing) with Pydantic v2 + Typer
+  - [x] add `src/sdlc/` package and `sdlc` console entry
+- [x] 2. Implement normative Pydantic v2 models for v1 artifacts (exactly as spec)
+- [x] 3. Implement `sdlc schema export --out sdlc/schemas/` (JSON Schema export)
+- [x] 4. Implement canonical JSON hashing (sorted keys, SHA-256)
+- [x] 5. Implement `sdlc validate <path>` (strict validation; extra=forbid)
+- [x] 6. Implement append-only journal writer:
+  - [x] `runs/journal.jsonl` (ExecutionRecord)
+  - [x] `decision_ledger.jsonl` (DecisionLedgerEntry)
+- [x] 7. Implement transition engine:
+  - [x] enforce transition table + gates
+  - [x] success and rejection both emit ExecutionRecord
+  - [x] enforce "Bead artifact_id == bead_id"
+  - [x] enforce acceptance check freeze after ready
+- [x] 8. Implement evidence commands:
+  - [x] `sdlc evidence collect <bead_id>` (skeleton from acceptance checks)
+  - [x] `sdlc evidence validate <bead_id>` (Evidence Validation Rule)
+  - [x] `sdlc evidence invalidate-if-stale <bead_id>`
+- [x] 9. Implement `sdlc grounding generate <bead_id>` (heuristic; best-effort)
+- [x] 10. Implement `sdlc approve <bead_id> --summary ...` writes approval DecisionLedgerEntry
+- [x] 11. Tests (pytest):
+  - [x] schema validation
+  - [x] hashing determinism
+  - [x] illegal transition rejection recording fields
+  - [x] manual_check constraints
+  - [x] acceptance coverage rule
+- [x] 12. Docs: `docs/sdlc_quickstart.md`
+  - [x] commands using `uv run sdlc ...`
+  - [x] example flow for one bead end-to-end
