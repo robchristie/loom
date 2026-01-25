@@ -742,6 +742,139 @@ def test_acceptance_checks_frozen_after_ready_requires_snapshot_match(tmp_path: 
     assert "Acceptance checks changed after ready" in result.notes
 
 
+def test_full_flow_smoke(tmp_path: Path) -> None:
+    from sdlc.engine import (
+        append_decision_entry,
+        create_approval_entry,
+        record_transition_attempt,
+        request_transition,
+        validate_evidence_bundle,
+    )
+    from sdlc.io import Paths, load_execution_records, write_model
+
+    paths = Paths(tmp_path)
+    bead_id = "work-abc123"
+    actor = Actor(kind="human", name="tester")
+    bead = Bead(
+        schema_name="sdlc.bead",
+        schema_version=1,
+        artifact_id=bead_id,
+        created_at=_now(),
+        created_by=Actor(kind="system", name="tester"),
+        bead_id=bead_id,
+        title="Test",
+        bead_type=BeadType.implementation,
+        status=BeadStatus.sized,
+        requirements_md="req",
+        acceptance_criteria_md="acc",
+        context_md="ctx",
+        acceptance_checks=[AcceptanceCheck(name="run", command="run", expect_exit_code=0)],
+        openspec_ref=ArtifactLink(artifact_type="openspec_ref", artifact_id="openspec-abc123"),
+    )
+    review = BeadReview(
+        schema_name="sdlc.bead_review",
+        schema_version=1,
+        artifact_id="review-abc123",
+        created_at=_now(),
+        created_by=Actor(kind="human", name="reviewer"),
+        bead_id=bead_id,
+        effort_bucket=EffortBucket.M,
+        tightened_acceptance_checks=bead.acceptance_checks,
+    )
+    grounding = GroundingBundle(
+        schema_name="sdlc.grounding_bundle",
+        schema_version=1,
+        artifact_id="grounding-work-abc123",
+        created_at=_now(),
+        created_by=Actor(kind="system", name="tester"),
+        bead_id=bead_id,
+        items=[],
+        allowed_commands=[],
+        disallowed_commands=[],
+        excluded_paths=[],
+    )
+    openspec_ref = OpenSpecRef(
+        schema_name="sdlc.openspec_ref",
+        schema_version=1,
+        artifact_id="openspec-abc123",
+        created_at=_now(),
+        created_by=Actor(kind="human", name="tester"),
+        change_id="add-thing",
+        state=OpenSpecState.approved,
+        path="openspec/changes/add-thing",
+    )
+    write_model(paths.bead_path(bead_id), bead)
+    write_model(paths.bead_dir(bead_id) / "bead_review.json", review)
+    write_model(paths.grounding_path(bead_id), grounding)
+    write_model(paths.bead_dir(bead_id) / "openspec_ref.json", openspec_ref)
+
+    result = request_transition(paths, bead_id, "sized -> ready", actor)
+    assert result.ok
+    record_transition_attempt(paths, bead_id, RunPhase.plan, actor, "sized -> ready", result)
+
+    result = request_transition(paths, bead_id, "ready -> in_progress", actor)
+    assert result.ok
+    record_transition_attempt(paths, bead_id, RunPhase.implement, actor, "ready -> in_progress", result)
+
+    current_bead = Bead.model_validate_json(paths.bead_path(bead_id).read_text(encoding="utf-8"))
+    evidence = EvidenceBundle(
+        schema_name="sdlc.evidence_bundle",
+        schema_version=1,
+        artifact_id="evidence-abc123",
+        created_at=_now(),
+        created_by=Actor(kind="system", name="tester"),
+        bead_id=bead_id,
+        for_bead_hash=canonical_hash_for_model(current_bead),
+        status=EvidenceStatus.collected,
+        items=[
+            EvidenceItem(
+                name="run",
+                evidence_type=EvidenceType.test_run,
+                command="run",
+                exit_code=0,
+            )
+        ],
+    )
+    write_model(paths.evidence_path(bead_id), evidence)
+    evidence_after, errors = validate_evidence_bundle(paths, bead_id, Actor(kind="system", name="tester"))
+    assert evidence_after is not None
+    assert not errors
+    assert evidence_after.status == EvidenceStatus.validated
+
+    result = request_transition(paths, bead_id, "in_progress -> verification_pending", actor)
+    assert result.ok
+    record_transition_attempt(
+        paths, bead_id, RunPhase.implement, actor, "in_progress -> verification_pending", result
+    )
+
+    system_actor = Actor(kind="system", name="tester")
+    result = request_transition(paths, bead_id, "verification_pending -> verified", system_actor)
+    assert result.ok
+    record_transition_attempt(
+        paths, bead_id, RunPhase.verify, system_actor, "verification_pending -> verified", result
+    )
+
+    entry = create_approval_entry(bead_id, "APPROVAL: ok", Actor(kind="human", name="approver"))
+    append_decision_entry(paths, entry)
+
+    result = request_transition(paths, bead_id, "verified -> approval_pending", actor)
+    assert result.ok
+    record_transition_attempt(
+        paths, bead_id, RunPhase.verify, actor, "verified -> approval_pending", result
+    )
+
+    result = request_transition(paths, bead_id, "approval_pending -> done", actor)
+    assert result.ok
+    record_transition_attempt(paths, bead_id, RunPhase.verify, actor, "approval_pending -> done", result)
+
+    final_bead = Bead.model_validate_json(paths.bead_path(bead_id).read_text(encoding="utf-8"))
+    assert final_bead.status == BeadStatus.done
+
+    records = load_execution_records(paths)
+    assert len(records) == 6
+    assert records[-1].applied_transition == "approval_pending -> done"
+
+
 def test_start_rejected_when_dependency_not_done(tmp_path: Path) -> None:
     from sdlc.io import Paths, write_model
     from sdlc.engine import request_transition
