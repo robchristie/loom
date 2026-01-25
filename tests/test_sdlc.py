@@ -27,18 +27,60 @@ from sdlc.models import (
     EvidenceStatus,
     EvidenceType,
     BeadReview,
+    BoundaryRegistry,
     GroundingBundle,
     HashRef,
     FileRef,
     GitRef,
     OpenSpecRef,
     OpenSpecState,
+    Subsystem,
 )
 from sdlc.cli import approve, evidence_validate, openspec_sync, request
 
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _write_boundary_registry(paths: "Paths") -> None:
+    (paths.repo_root / "sdlc").mkdir(parents=True, exist_ok=True)
+    (paths.repo_root / "sdlc" / "boundary_registry.json").write_text(
+        json.dumps(
+            {
+                "schema_name": "sdlc.boundary_registry",
+                "schema_version": 1,
+                "artifact_id": "boundary-registry-test",
+                "created_at": _now().isoformat(),
+                "created_by": {"kind": "system", "name": "tester"},
+                "registry_name": "test",
+                "subsystems": [{"name": "docs", "paths": ["docs/"]}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def _write_boundary_registry_with(
+    paths: "Paths",
+    subsystems: list[dict[str, object]],
+    artifact_id: str = "boundary-registry-test",
+) -> None:
+    (paths.repo_root / "sdlc").mkdir(parents=True, exist_ok=True)
+    (paths.repo_root / "sdlc" / "boundary_registry.json").write_text(
+        json.dumps(
+            {
+                "schema_name": "sdlc.boundary_registry",
+                "schema_version": 1,
+                "artifact_id": artifact_id,
+                "created_at": _now().isoformat(),
+                "created_by": {"kind": "system", "name": "tester"},
+                "registry_name": "test",
+                "subsystems": subsystems,
+            }
+        ),
+        encoding="utf-8",
+    )
 
 
 def test_schema_extra_forbidden() -> None:
@@ -66,6 +108,222 @@ def test_hash_deterministic() -> None:
     first = sha256_canonical_json(content)
     second = sha256_canonical_json({"nested": {"y": 8, "z": 9}, "a": 1, "b": 2})
     assert first == second
+
+
+def test_compute_touched_subsystems_by_prefix() -> None:
+    from sdlc.engine import compute_touched_subsystems
+
+    registry = BoundaryRegistry(
+        schema_name="sdlc.boundary_registry",
+        schema_version=1,
+        artifact_id="boundary-registry-test",
+        created_at=_now(),
+        created_by=Actor(kind="system", name="tester"),
+        registry_name="test",
+        subsystems=[
+            Subsystem(name="core", paths=["src/"]),
+            Subsystem(name="docs", paths=["docs/", "README.md"]),
+        ],
+    )
+    touched, files_touched = compute_touched_subsystems(
+        registry,
+        ["src/sdlc/engine.py", "docs/guide.md", "README.md", "scripts/tool.sh"],
+    )
+    assert files_touched == 4
+    assert touched == ["core", "docs"]
+
+
+def test_boundary_enforcement_blocks_verification_and_links_registry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from sdlc.engine import record_transition_attempt, request_transition
+    from sdlc.io import Paths, load_execution_records, write_model
+
+    paths = Paths(tmp_path)
+    _write_boundary_registry_with(
+        paths,
+        subsystems=[
+            {"name": "core", "paths": ["src/"]},
+            {"name": "docs", "paths": ["docs/"]},
+        ],
+        artifact_id="boundary-registry-enforce",
+    )
+    bead_id = "work-abc123"
+    bead = Bead(
+        schema_name="sdlc.bead",
+        schema_version=1,
+        artifact_id=bead_id,
+        created_at=_now(),
+        created_by=Actor(kind="system", name="tester"),
+        bead_id=bead_id,
+        title="Test",
+        bead_type=BeadType.implementation,
+        status=BeadStatus.verification_pending,
+        requirements_md="req",
+        acceptance_criteria_md="acc",
+        context_md="ctx",
+        acceptance_checks=[],
+    )
+    evidence = EvidenceBundle(
+        schema_name="sdlc.evidence_bundle",
+        schema_version=1,
+        artifact_id="evidence-abc123",
+        created_at=_now(),
+        created_by=Actor(kind="system", name="tester"),
+        bead_id=bead_id,
+        status=EvidenceStatus.validated,
+        for_bead_hash=canonical_hash_for_model(bead),
+        items=[],
+    )
+    write_model(paths.bead_path(bead_id), bead)
+    write_model(paths.evidence_path(bead_id), evidence)
+    monkeypatch.setenv("SDLC_MAX_FILES_TOUCHED", "1")
+    monkeypatch.setenv("SDLC_MAX_SUBSYSTEMS_TOUCHED", "1")
+    monkeypatch.setattr(
+        "sdlc.engine.detect_changed_files",
+        lambda _: ["src/sdlc/engine.py", "docs/guide.md"],
+    )
+
+    actor = Actor(kind="system", name="tester")
+    result = request_transition(paths, bead_id, "verification_pending -> verified", actor)
+    assert not result.ok
+    assert "Boundary violation" in result.notes
+
+    record_transition_attempt(
+        paths, bead_id, RunPhase.verify, actor, "verification_pending -> verified", result
+    )
+    records = load_execution_records(paths)
+    assert records
+    last = records[-1]
+    assert any(
+        link.artifact_type == "boundary_registry" and link.artifact_id == "boundary-registry-enforce"
+        for link in last.links
+    )
+
+
+def test_discovery_policy_blocks_production_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from sdlc.engine import record_transition_attempt, request_transition, _write_ready_acceptance_snapshot
+    from sdlc.io import Paths, load_execution_records, write_model
+
+    paths = Paths(tmp_path)
+    _write_boundary_registry_with(
+        paths,
+        subsystems=[{"name": "core", "paths": ["src/"]}],
+        artifact_id="boundary-registry-discovery",
+    )
+    bead_id = "work-abc123"
+    bead = Bead(
+        schema_name="sdlc.bead",
+        schema_version=1,
+        artifact_id=bead_id,
+        created_at=_now(),
+        created_by=Actor(kind="system", name="tester"),
+        bead_id=bead_id,
+        title="Test",
+        bead_type=BeadType.discovery,
+        status=BeadStatus.ready,
+        requirements_md="req",
+        acceptance_criteria_md="acc",
+        context_md="ctx",
+        acceptance_checks=[],
+    )
+    grounding = GroundingBundle(
+        schema_name="sdlc.grounding_bundle",
+        schema_version=1,
+        artifact_id="grounding-work-abc123",
+        created_at=_now(),
+        created_by=Actor(kind="system", name="tester"),
+        bead_id=bead_id,
+        items=[],
+        allowed_commands=[],
+        disallowed_commands=[],
+        excluded_paths=[],
+    )
+    write_model(paths.bead_path(bead_id), bead)
+    write_model(paths.grounding_path(bead_id), grounding)
+    _write_ready_acceptance_snapshot(paths, bead)
+    monkeypatch.setattr(
+        "sdlc.engine.detect_changed_files",
+        lambda _: ["src/main.py", "docs/notes.md"],
+    )
+
+    actor = Actor(kind="human", name="tester")
+    result = request_transition(paths, bead_id, "ready -> in_progress", actor)
+    assert not result.ok
+    assert "Discovery policy violation" in result.notes
+
+    record_transition_attempt(
+        paths, bead_id, RunPhase.implement, actor, "ready -> in_progress", result
+    )
+    records = load_execution_records(paths)
+    assert records
+    last = records[-1]
+    assert last.applied_transition is None
+    assert any(link.artifact_type == "boundary_registry" for link in last.links)
+
+
+def test_discovery_policy_allows_allowlist(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from sdlc.engine import record_transition_attempt, request_transition, _write_ready_acceptance_snapshot
+    from sdlc.io import Paths, load_execution_records, write_model
+
+    paths = Paths(tmp_path)
+    _write_boundary_registry_with(
+        paths,
+        subsystems=[{"name": "core", "paths": ["src/"]}],
+        artifact_id="boundary-registry-discovery",
+    )
+    bead_id = "work-abc123"
+    bead = Bead(
+        schema_name="sdlc.bead",
+        schema_version=1,
+        artifact_id=bead_id,
+        created_at=_now(),
+        created_by=Actor(kind="system", name="tester"),
+        bead_id=bead_id,
+        title="Test",
+        bead_type=BeadType.discovery,
+        status=BeadStatus.ready,
+        requirements_md="req",
+        acceptance_criteria_md="acc",
+        context_md="ctx",
+        acceptance_checks=[],
+    )
+    grounding = GroundingBundle(
+        schema_name="sdlc.grounding_bundle",
+        schema_version=1,
+        artifact_id="grounding-work-abc123",
+        created_at=_now(),
+        created_by=Actor(kind="system", name="tester"),
+        bead_id=bead_id,
+        items=[],
+        allowed_commands=[],
+        disallowed_commands=[],
+        excluded_paths=[],
+    )
+    write_model(paths.bead_path(bead_id), bead)
+    write_model(paths.grounding_path(bead_id), grounding)
+    _write_ready_acceptance_snapshot(paths, bead)
+    monkeypatch.setattr(
+        "sdlc.engine.detect_changed_files",
+        lambda _: ["docs/notes.md"],
+    )
+
+    actor = Actor(kind="human", name="tester")
+    result = request_transition(paths, bead_id, "ready -> in_progress", actor)
+    assert result.ok
+
+    record_transition_attempt(
+        paths, bead_id, RunPhase.implement, actor, "ready -> in_progress", result
+    )
+    records = load_execution_records(paths)
+    assert records
+    last = records[-1]
+    assert last.applied_transition == "ready -> in_progress"
+    assert any(link.artifact_type == "boundary_registry" for link in last.links)
 
 
 def test_grounding_generate_writes_bundle(tmp_path: Path) -> None:
@@ -309,6 +567,7 @@ def test_transition_authority_system_only(tmp_path: Path) -> None:
     from sdlc.io import Paths, write_model
 
     paths = Paths(tmp_path)
+    _write_boundary_registry(paths)
 
     bead_id = "work-abc123"
     bead = Bead(
@@ -338,6 +597,7 @@ def test_illegal_transition_notes_are_specific(tmp_path: Path) -> None:
     from sdlc.io import Paths, write_model
 
     paths = Paths(tmp_path)
+    _write_boundary_registry(paths)
 
     bead_id = "work-abc123"
     bead = Bead(
@@ -368,6 +628,7 @@ def test_request_records_phase_from_transition(tmp_path: Path, monkeypatch: pyte
 
     monkeypatch.chdir(tmp_path)
     paths = Paths(Path.cwd())
+    _write_boundary_registry(paths)
 
     bead_id = "work-abc123"
     bead = Bead(
@@ -404,6 +665,7 @@ def test_exception_profile_links_decision_on_start(
 
     monkeypatch.chdir(tmp_path)
     paths = Paths(Path.cwd())
+    _write_boundary_registry(paths)
     bead_id = "work-abc123"
     bead = Bead(
         schema_name="sdlc.bead",
@@ -481,6 +743,7 @@ def test_approval_links_decision_on_done(tmp_path: Path, monkeypatch: pytest.Mon
 
     monkeypatch.chdir(tmp_path)
     paths = Paths(Path.cwd())
+    _write_boundary_registry(paths)
     bead_id = "work-abc123"
     actor = Actor(kind="human", name="tester")
     bead = Bead(
@@ -537,6 +800,7 @@ def test_exception_profile_requires_decision_and_no_applied_transition(
 
     monkeypatch.chdir(tmp_path)
     paths = Paths(Path.cwd())
+    _write_boundary_registry(paths)
     bead_id = "work-abc123"
     bead = Bead(
         schema_name="sdlc.bead",
@@ -612,6 +876,7 @@ def test_authority_blocks_system_only_transition_for_human(tmp_path: Path) -> No
     from sdlc.engine import request_transition
 
     paths = Paths(tmp_path)
+    _write_boundary_registry(paths)
     bead_id = "work-abc123"
     bead = Bead(
         schema_name="sdlc.bead",
@@ -640,6 +905,7 @@ def test_request_failure_journals_record(tmp_path: Path, monkeypatch: pytest.Mon
 
     monkeypatch.chdir(tmp_path)
     paths = Paths(Path.cwd())
+    _write_boundary_registry(paths)
     bead_id = "work-abc123"
     bead = Bead(
         schema_name="sdlc.bead",
@@ -958,6 +1224,7 @@ def test_full_flow_smoke(tmp_path: Path) -> None:
     from sdlc.io import Paths, load_execution_records, write_model
 
     paths = Paths(tmp_path)
+    _write_boundary_registry(paths)
     bead_id = "work-abc123"
     actor = Actor(kind="human", name="tester")
     bead = Bead(
@@ -1241,6 +1508,7 @@ def test_start_allowed_when_dependency_done(tmp_path: Path) -> None:
     from sdlc.engine import request_transition, _write_ready_acceptance_snapshot
 
     paths = Paths(tmp_path)
+    _write_boundary_registry(paths)
     bead_a = Bead(
         schema_name="sdlc.bead",
         schema_version=1,
@@ -1298,6 +1566,7 @@ def test_spec_gate_requires_openspec_ref_file_for_implementation(tmp_path: Path)
     from sdlc.engine import request_transition, _write_ready_acceptance_snapshot
 
     paths = Paths(tmp_path)
+    _write_boundary_registry(paths)
     bead_id = "work-abc123"
     bead = Bead(
         schema_name="sdlc.bead",
@@ -1451,6 +1720,7 @@ def test_openspec_sync_writes_runs_openspec_ref(tmp_path: Path, monkeypatch: pyt
 
     monkeypatch.chdir(tmp_path)
     paths = Paths(Path.cwd())
+    _write_boundary_registry(paths)
     bead_id = "work-abc123"
     bead = Bead(
         schema_name="sdlc.bead",

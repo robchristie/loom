@@ -1,0 +1,78 @@
+{
+  "schema_name": "sdlc.boundary_registry",
+  "schema_version": 1,
+  "artifact_id": "boundary-registry-default",
+  "created_at": "2026-01-01T00:00:00Z",
+  "created_by": {
+    "kind": "system",
+    "name": "loom-bootstrap"
+  },
+  "registry_name": "loom-default-boundaries",
+  "subsystems": [
+    {
+      "name": "engine-core",
+      "paths": [
+        "src/sdlc/engine.py",
+        "src/sdlc/io.py",
+        "src/sdlc/codec.py"
+      ],
+      "invariants": [
+        "Lifecycle transitions are engine-authored only",
+        "ExecutionRecord and DecisionLedgerEntry are append-only",
+        "Acceptance checks are frozen after ready"
+      ]
+    },
+    {
+      "name": "models-schema",
+      "paths": [
+        "src/sdlc/models.py"
+      ],
+      "invariants": [
+        "Schema version is monotonic",
+        "extra=forbid enforced on all models",
+        "ArtifactId and BeadId constraints are preserved"
+      ]
+    },
+    {
+      "name": "cli-interface",
+      "paths": [
+        "src/sdlc/cli.py"
+      ],
+      "invariants": [
+        "CLI must not mutate Bead.status directly",
+        "All lifecycle changes go through engine"
+      ]
+    },
+    {
+      "name": "tests",
+      "paths": [
+        "tests/"
+      ],
+      "invariants": [
+        "Tests may not modify production code at runtime",
+        "Tests must assert journal behavior for failures"
+      ]
+    },
+    {
+      "name": "documentation",
+      "paths": [
+        "docs/",
+        "README.md"
+      ],
+      "invariants": [
+        "Docs changes do not alter runtime behavior"
+      ]
+    },
+    {
+      "name": "openspec",
+      "paths": [
+        "openspec/"
+      ],
+      "invariants": [
+        "Approved OpenSpecRef required for implementation beads",
+        "OpenSpecRef state transitions are human-authored"
+      ]
+    }
+  ],
+  "notes": "Default boundary registry for Loom MVP. Used for subsystem counting, discovery bead protection, and boundary enforcement."
+}

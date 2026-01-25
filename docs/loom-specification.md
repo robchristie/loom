@@ -323,7 +323,7 @@ BeadReview MUST output:
 Boundary Computation Rule (Normative)
 
  * The lifecycle engine MUST compute “subsystems touched” by path-prefix matching changed files against the `BoundaryRegistry` referenced by the bead (`Bead.boundary_registry_ref`).
- * If `Bead.boundary_registry_ref` is absent, the engine MUST use the project’s default boundary registry and record that choice in the `ExecutionRecord`.
+ * If `Bead.boundary_registry_ref` is absent, the engine MUST use the project’s default boundary registry (`sdlc/boundary_registry.json`) and record that choice in the `ExecutionRecord`.
 
 Boundary Violation Handling (Normative)
 
@@ -356,11 +356,11 @@ Discovery Authorization (Normative)
 Production Path Definition (Normative)
 
   * “Production paths” are defined as the union of all path prefixes listed in the active BoundaryRegistry.subsystems[].paths used for the bead.
-  * If the bead does not reference a BoundaryRegistry, the engine MUST use the project default boundary registry and record that choice in the ExecutionRecord.
+  * If the bead does not reference a BoundaryRegistry, the engine MUST use the project default boundary registry (`sdlc/boundary_registry.json`) and record that choice in the ExecutionRecord.
  * The lifecycle engine MUST enforce one of the following controls (project-configurable), and MUST record which policy is active:
 
   Policy A (recommended):
-  * Discovery beads MAY modify files only under a project-configured allowlist of non-production paths (e.g., docs/, notes/, tools/, experiments/, runs/).
+  * Discovery beads MAY modify files only under a project-configured allowlist of non-production paths (default: docs/, notes/, tools/, experiments/, runs/).
   * Discovery beads MUST NOT modify files whose paths match any “production path” prefix as defined above.
 
   Policy B:

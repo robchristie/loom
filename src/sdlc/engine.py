@@ -1,8 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import json
+import os
 from pathlib import Path
+import subprocess
 from typing import Iterable, Optional
 
 from .codec import sha256_canonical_json
@@ -26,6 +28,7 @@ from .models import (
     AcceptanceCheck,
     Actor,
     ArtifactLink,
+    BoundaryRegistry,
     Bead,
     BeadReview,
     BeadStatus,
@@ -82,12 +85,23 @@ class TransitionResult:
     notes: str
     applied_transition: Optional[str] = None
     phase: Optional[RunPhase] = None
+    links: list[ArtifactLink] = field(default_factory=list)
 
 
 @dataclass
 class GateResult:
     ok: bool
     notes: str = ""
+
+
+@dataclass(frozen=True)
+class BoundaryEvaluation:
+    registry: BoundaryRegistry
+    registry_hash: HashRef
+    touched_subsystems: list[str]
+    files_touched: int
+    production_prefixes: list[str]
+    registry_path: Optional[Path]
 
 
 def canonical_hash_for_model(model: Bead | BeadReview | EvidenceBundle) -> HashRef:
@@ -98,6 +112,171 @@ def canonical_hash_for_model(model: Bead | BeadReview | EvidenceBundle) -> HashR
 def canonical_hash_for_acceptance_checks(checks: list[AcceptanceCheck]) -> HashRef:
     payload = [item.model_dump(mode="json") for item in checks]
     return HashRef(hash=sha256_canonical_json(payload))
+
+
+def canonical_hash_for_boundary_registry(registry: BoundaryRegistry) -> HashRef:
+    payload = registry.model_dump(mode="json")
+    return HashRef(hash=sha256_canonical_json(payload))
+
+
+def _default_boundary_registry_path(paths: Paths) -> Path:
+    return paths.repo_root / "sdlc" / "boundary_registry.json"
+
+
+def load_boundary_registry(paths: Paths, bead: Bead) -> tuple[BoundaryRegistry, Optional[Path]]:
+    if bead.boundary_registry_ref is not None:
+        ref = bead.boundary_registry_ref
+        if ref.artifact_type != "boundary_registry":
+            raise ValueError("Bead.boundary_registry_ref must reference boundary_registry artifact")
+        candidate = paths.repo_root / "sdlc" / f"{ref.artifact_id}.json"
+        if candidate.exists():
+            return BoundaryRegistry.model_validate_json(
+                candidate.read_text(encoding="utf-8")
+            ), candidate
+    default_path = _default_boundary_registry_path(paths)
+    if not default_path.exists():
+        raise FileNotFoundError(f"BoundaryRegistry not found: {default_path}")
+    return BoundaryRegistry.model_validate_json(
+        default_path.read_text(encoding="utf-8")
+    ), default_path
+
+
+def detect_changed_files(paths: Paths, head_before: Optional[str] = None) -> list[str]:
+    try:
+        if head_before:
+            output = subprocess.check_output(
+                ["git", "diff", "--name-only", f"{head_before}..HEAD"],
+                cwd=paths.repo_root,
+            )
+        else:
+            output = subprocess.check_output(
+                ["git", "diff", "--name-only", "HEAD"],
+                cwd=paths.repo_root,
+            )
+        return [line.strip() for line in output.decode("utf-8").splitlines() if line.strip()]
+    except subprocess.CalledProcessError:
+        return []
+
+
+def _normalize_prefix(prefix: str) -> str:
+    return prefix.lstrip("./")
+
+
+def compute_touched_subsystems(
+    registry: BoundaryRegistry, changed_files: Iterable[str]
+) -> tuple[list[str], int]:
+    touched: set[str] = set()
+    count = 0
+    normalized_files = [_normalize_prefix(path) for path in changed_files]
+    for path in normalized_files:
+        count += 1
+        for subsystem in registry.subsystems:
+            for prefix in subsystem.paths:
+                normalized_prefix = _normalize_prefix(prefix)
+                if not normalized_prefix:
+                    continue
+                if path.startswith(normalized_prefix):
+                    touched.add(subsystem.name)
+                    break
+    return sorted(touched), count
+
+
+def _production_prefixes(registry: BoundaryRegistry) -> list[str]:
+    prefixes: set[str] = set()
+    for subsystem in registry.subsystems:
+        for prefix in subsystem.paths:
+            normalized = _normalize_prefix(prefix)
+            if normalized:
+                prefixes.add(normalized)
+    return sorted(prefixes)
+
+
+def evaluate_boundary(
+    paths: Paths,
+    bead: Bead,
+    changed_files: Optional[list[str]] = None,
+    changed_files_provider: Optional[callable] = None,
+) -> BoundaryEvaluation:
+    registry, registry_path = load_boundary_registry(paths, bead)
+    registry_hash = canonical_hash_for_boundary_registry(registry)
+    if changed_files is None:
+        if changed_files_provider is None:
+            changed_files = detect_changed_files(paths)
+        else:
+            changed_files = changed_files_provider(paths)
+    touched_subsystems, files_touched = compute_touched_subsystems(registry, changed_files)
+    return BoundaryEvaluation(
+        registry=registry,
+        registry_hash=registry_hash,
+        touched_subsystems=touched_subsystems,
+        files_touched=files_touched,
+        production_prefixes=_production_prefixes(registry),
+        registry_path=registry_path,
+    )
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+def _discovery_allowlist(default: str = "docs/,notes/,tools/,experiments/,runs/") -> list[str]:
+    raw = os.getenv("SDLC_DISCOVERY_ALLOWLIST", default)
+    items = []
+    for item in raw.split(","):
+        cleaned = _normalize_prefix(item.strip())
+        if cleaned:
+            items.append(cleaned)
+    return items
+
+
+def _boundary_link(registry: BoundaryRegistry) -> ArtifactLink:
+    return ArtifactLink(
+        artifact_type="boundary_registry",
+        artifact_id=registry.artifact_id,
+        schema_name="sdlc.boundary_registry",
+        schema_version=1,
+    )
+
+
+def boundary_violation_notes(
+    evaluation: BoundaryEvaluation, max_files: int, max_subsystems: int
+) -> str:
+    parts = [
+        f"Boundary violation: files_touched={evaluation.files_touched} (limit {max_files})",
+        f"subsystems_touched={len(evaluation.touched_subsystems)} (limit {max_subsystems})",
+    ]
+    if evaluation.touched_subsystems:
+        parts.append("touched_subsystems=" + ", ".join(evaluation.touched_subsystems))
+    parts.append(f"boundary_registry_hash={evaluation.registry_hash.hash}")
+    return "; ".join(parts)
+
+
+def discovery_policy_violation_notes(
+    evaluation: BoundaryEvaluation,
+    changed_files: list[str],
+    allowlist: list[str],
+    policy_name: str = "Policy A",
+) -> str:
+    normalized_files = [_normalize_prefix(path) for path in changed_files]
+    production_hits = []
+    for path in normalized_files:
+        for prefix in evaluation.production_prefixes:
+            if path.startswith(prefix):
+                production_hits.append(path)
+                break
+    parts = [
+        f"Discovery policy violation ({policy_name})",
+        f"production_paths_hit={sorted(set(production_hits))}",
+        f"allowlist={allowlist}",
+        f"boundary_registry_hash={evaluation.registry_hash.hash}",
+    ]
+    return "; ".join(parts)
 
 
 def _ready_acceptance_snapshot_path(paths: Paths, bead_id: str) -> Path:
@@ -288,6 +467,23 @@ def request_transition(paths: Paths, bead_id: str, transition: str, actor: Actor
         )
 
     errors: list[str] = []
+    info_notes: list[str] = []
+    links: list[ArtifactLink] = []
+    boundary_eval: Optional[BoundaryEvaluation] = None
+    changed_files: Optional[list[str]] = None
+
+    def ensure_boundary_eval() -> BoundaryEvaluation:
+        nonlocal boundary_eval, changed_files
+        if boundary_eval is None:
+            changed_files = detect_changed_files(paths)
+            boundary_eval = evaluate_boundary(paths, bead, changed_files=changed_files)
+            links.append(_boundary_link(boundary_eval.registry))
+            if bead.boundary_registry_ref is None and boundary_eval.registry_path is not None:
+                info_notes.append(
+                    f"boundary_registry_default={boundary_eval.registry_path.as_posix()}"
+                )
+            info_notes.append(f"boundary_registry_hash={boundary_eval.registry_hash.hash}")
+        return boundary_eval
 
     artifact_error = ensure_bead_artifact_id(bead)
     if artifact_error:
@@ -334,6 +530,28 @@ def request_transition(paths: Paths, bead_id: str, transition: str, actor: Actor
         evidence_error = _evidence_gate(paths, bead)
         if evidence_error:
             errors.append(evidence_error)
+        try:
+            evaluation = ensure_boundary_eval()
+            max_files = _env_int("SDLC_MAX_FILES_TOUCHED", 8)
+            max_subsystems = _env_int("SDLC_MAX_SUBSYSTEMS_TOUCHED", 2)
+            info_notes.append(
+                "boundary_evaluation="
+                f"files_touched:{evaluation.files_touched},"
+                f"subsystems_touched:{len(evaluation.touched_subsystems)}"
+            )
+            if (
+                evaluation.files_touched > max_files
+                or len(evaluation.touched_subsystems) > max_subsystems
+            ):
+                errors.append(
+                    boundary_violation_notes(evaluation, max_files, max_subsystems)
+                )
+                errors.append(
+                    "Boundary limit exceeded: abort bead (aborted:needs-discovery) "
+                    "or split via BeadReview"
+                )
+        except (FileNotFoundError, ValueError) as exc:
+            errors.append(str(exc))
     elif bead.status == BeadStatus.verified and to_status == BeadStatus.approval_pending.value:
         pass
     elif bead.status == BeadStatus.approval_pending and to_status == BeadStatus.done.value:
@@ -343,12 +561,58 @@ def request_transition(paths: Paths, bead_id: str, transition: str, actor: Actor
     elif to_status in FAILURE_TARGETS:
         pass
 
+    if bead.bead_type == BeadType.discovery and to_status in {
+        BeadStatus.in_progress.value,
+        BeadStatus.verified.value,
+    }:
+        try:
+            evaluation = ensure_boundary_eval()
+            allowlist = _discovery_allowlist()
+            info_notes.append(
+                "discovery_policy=Policy A;"
+                f"allowlist={allowlist};"
+                f"production_prefixes={evaluation.production_prefixes}"
+            )
+            normalized_files = [_normalize_prefix(path) for path in (changed_files or [])]
+            outside_allowlist = [
+                path
+                for path in normalized_files
+                if not any(path.startswith(prefix) for prefix in allowlist)
+            ]
+            production_hits = [
+                path
+                for path in normalized_files
+                if any(path.startswith(prefix) for prefix in evaluation.production_prefixes)
+            ]
+            if outside_allowlist or production_hits:
+                parts = ["Discovery policy violation (Policy A)"]
+                if production_hits:
+                    parts.append(f"production_paths_hit={sorted(set(production_hits))}")
+                if outside_allowlist:
+                    parts.append(f"outside_allowlist={sorted(set(outside_allowlist))}")
+                parts.append(f"allowlist={allowlist}")
+                parts.append(f"boundary_registry_hash={evaluation.registry_hash.hash}")
+                errors.append("; ".join(parts))
+        except (FileNotFoundError, ValueError) as exc:
+            errors.append(str(exc))
+
+    notes = "; ".join(errors) if errors else ""
+    if info_notes:
+        extra = "; ".join(info_notes)
+        notes = f"{notes}; {extra}".strip("; ").strip()
+
     if errors:
-        return TransitionResult(False, "; ".join(errors), phase=phase_hint)
+        return TransitionResult(False, notes, phase=phase_hint, links=links)
 
     _apply_transition(bead, BeadStatus(to_status))
     write_model(paths.bead_path(bead_id), bead)
-    return TransitionResult(True, "", applied_transition=f"{from_status} -> {to_status}", phase=phase_hint)
+    return TransitionResult(
+        True,
+        notes,
+        applied_transition=f"{from_status} -> {to_status}",
+        phase=phase_hint,
+        links=links,
+    )
 
 
 def build_execution_record(
@@ -671,6 +935,8 @@ def record_transition_attempt(
     phase_value = result.phase or phase
     git_ref = GitRef(head_before=git_head(paths), dirty_before=git_is_dirty(paths))
     links: list[ArtifactLink] = list(extra_links) if extra_links else []
+    if result.links:
+        links.extend(result.links)
     if result.ok and result.applied_transition:
         transition = result.applied_transition.strip()
         if transition == "ready -> in_progress":
