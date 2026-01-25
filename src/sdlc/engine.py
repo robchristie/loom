@@ -151,6 +151,12 @@ def _spec_gate(paths: Paths, bead: Bead) -> Optional[str]:
         return f"OpenSpecRef invalid: {exc}"
     if ref.state != OpenSpecState.approved:
         return "OpenSpecRef not approved"
+    if ref.artifact_id != bead.openspec_ref.artifact_id:
+        return (
+            "OpenSpecRef mismatch: runs/"
+            f"{bead.bead_id}/openspec_ref.json artifact_id='{ref.artifact_id}' "
+            f"does not match bead.openspec_ref.artifact_id='{bead.openspec_ref.artifact_id}'"
+        )
     return None
 
 
