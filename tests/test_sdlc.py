@@ -10,6 +10,7 @@ from pydantic import ValidationError
 
 from sdlc.codec import sha256_canonical_json
 from sdlc.engine import acceptance_coverage_errors, canonical_hash_for_model
+from sdlc.cli import app
 from sdlc.models import (
     Actor,
     AcceptanceCheck,
@@ -91,6 +92,15 @@ def test_grounding_generate_writes_bundle(tmp_path: Path) -> None:
     grounding_path = paths.grounding_path(bead_id)
     assert grounding_path.exists()
     GroundingBundle.model_validate_json(grounding_path.read_text(encoding="utf-8"))
+
+
+def test_schema_export_alias_command_works(tmp_path: Path) -> None:
+    from typer.testing import CliRunner
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["schema", "export", "--out", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    assert list(tmp_path.glob("*.json"))
 
 
 def test_manual_check_requires_human_summary() -> None:

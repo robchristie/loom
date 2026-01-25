@@ -24,6 +24,7 @@ from .models import Actor, RunPhase, schema_registry
 
 
 app = typer.Typer(add_completion=False)
+schema_app = typer.Typer(add_completion=False)
 
 
 def _phase_for_transition(transition: str) -> RunPhase:
@@ -86,6 +87,11 @@ def schema_export(out: Path = Path("sdlc/schemas")) -> None:
             )
 
 
+@schema_app.command("export")
+def schema_export_alias(out: Path = Path("sdlc/schemas")) -> None:
+    schema_export(out)
+
+
 @app.command()
 def request(
     bead_id: str,
@@ -104,6 +110,9 @@ def request(
 
 evidence_app = typer.Typer(add_completion=False)
 app.add_typer(evidence_app, name="evidence")
+
+
+app.add_typer(schema_app, name="schema")
 
 
 grounding_app = typer.Typer(add_completion=False)
