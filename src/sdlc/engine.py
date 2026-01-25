@@ -35,6 +35,7 @@ from .models import (
     ExecutionProfile,
     ExecutionRecord,
     GitRef,
+    GroundingBundle,
     HashRef,
     OpenSpecRef,
     OpenSpecState,
@@ -415,7 +416,7 @@ def _find_item_for_check(evidence: EvidenceBundle, check: AcceptanceCheck) -> Op
     for item in evidence.items:
         if item.name == check.name:
             return item
-    if check.kind == "command" and check.command:
+    if check.command:
         for item in evidence.items:
             if item.command == check.command:
                 return item

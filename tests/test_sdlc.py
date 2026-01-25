@@ -177,6 +177,49 @@ def test_acceptance_coverage_exception_waiver_allows_validation() -> None:
     assert not errors
 
 
+def test_find_item_for_check_no_kind_field_does_not_crash() -> None:
+    from sdlc.engine import evidence_validation_errors
+
+    bead = Bead(
+        schema_name="sdlc.bead",
+        schema_version=1,
+        artifact_id="work-abc123",
+        created_at=_now(),
+        created_by=Actor(kind="system", name="tester"),
+        bead_id="work-abc123",
+        title="Test",
+        bead_type=BeadType.implementation,
+        status=BeadStatus.draft,
+        requirements_md="req",
+        acceptance_criteria_md="acc",
+        context_md="ctx",
+        acceptance_checks=[
+            AcceptanceCheck(name="missing", command="uv run pytest -q", expect_exit_code=0)
+        ],
+    )
+    evidence = EvidenceBundle(
+        schema_name="sdlc.evidence_bundle",
+        schema_version=1,
+        artifact_id="evidence-abc123",
+        created_at=_now(),
+        created_by=Actor(kind="system", name="tester"),
+        bead_id=bead.bead_id,
+        for_bead_hash=canonical_hash_for_model(bead),
+        status=EvidenceStatus.collected,
+        items=[
+            EvidenceItem(
+                name="other",
+                evidence_type=EvidenceType.test_run,
+                command="uv run pytest -q --not-it",
+                exit_code=0,
+            )
+        ],
+    )
+
+    errors = evidence_validation_errors(bead, evidence, [])
+    assert "Missing evidence for command check 'missing'" in errors
+
+
 def test_illegal_transition_record_shape(tmp_path: Path) -> None:
     from sdlc.io import Paths, write_model
     from sdlc.engine import record_transition_attempt, TransitionResult
