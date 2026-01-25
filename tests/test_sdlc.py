@@ -21,10 +21,12 @@ from sdlc.models import (
     BeadType,
     DecisionLedgerEntry,
     DecisionType,
+    EffortBucket,
     EvidenceBundle,
     EvidenceItem,
     EvidenceStatus,
     EvidenceType,
+    BeadReview,
     GroundingBundle,
     HashRef,
     OpenSpecRef,
@@ -678,6 +680,68 @@ def test_evidence_validate_sets_status_validated_on_success(tmp_path: Path) -> N
     assert evidence_after.status == EvidenceStatus.validated
 
 
+def test_acceptance_checks_frozen_after_ready_requires_snapshot_match(tmp_path: Path) -> None:
+    from sdlc.io import Paths, write_model
+    from sdlc.engine import request_transition
+
+    paths = Paths(tmp_path)
+    bead_id = "work-abc123"
+    bead = Bead(
+        schema_name="sdlc.bead",
+        schema_version=1,
+        artifact_id=bead_id,
+        created_at=_now(),
+        created_by=Actor(kind="system", name="tester"),
+        bead_id=bead_id,
+        title="Test",
+        bead_type=BeadType.discovery,
+        status=BeadStatus.sized,
+        requirements_md="req",
+        acceptance_criteria_md="acc",
+        context_md="ctx",
+        acceptance_checks=[AcceptanceCheck(name="cmd", command="run", expect_exit_code=0)],
+    )
+    review = BeadReview(
+        schema_name="sdlc.bead_review",
+        schema_version=1,
+        artifact_id="review-abc123",
+        created_at=_now(),
+        created_by=Actor(kind="human", name="reviewer"),
+        bead_id=bead_id,
+        effort_bucket=EffortBucket.M,
+        tightened_acceptance_checks=bead.acceptance_checks,
+    )
+    grounding = GroundingBundle(
+        schema_name="sdlc.grounding_bundle",
+        schema_version=1,
+        artifact_id="grounding-work-abc123",
+        created_at=_now(),
+        created_by=Actor(kind="system", name="tester"),
+        bead_id=bead_id,
+        items=[],
+        allowed_commands=[],
+        disallowed_commands=[],
+        excluded_paths=[],
+    )
+    write_model(paths.bead_path(bead_id), bead)
+    write_model(paths.bead_dir(bead_id) / "bead_review.json", review)
+    write_model(paths.grounding_path(bead_id), grounding)
+
+    actor = Actor(kind="human", name="tester")
+    result = request_transition(paths, bead_id, "sized -> ready", actor)
+    assert result.ok
+
+    bead = Bead.model_validate_json(paths.bead_path(bead_id).read_text(encoding="utf-8"))
+    bead.acceptance_checks.append(
+        AcceptanceCheck(name="mutated", command="other", expect_exit_code=0)
+    )
+    write_model(paths.bead_path(bead_id), bead)
+
+    result = request_transition(paths, bead_id, "ready -> in_progress", actor)
+    assert not result.ok
+    assert "Acceptance checks changed after ready" in result.notes
+
+
 def test_start_rejected_when_dependency_not_done(tmp_path: Path) -> None:
     from sdlc.io import Paths, write_model
     from sdlc.engine import request_transition
@@ -724,7 +788,7 @@ def test_start_rejected_when_dependency_not_done(tmp_path: Path) -> None:
 
 def test_start_allowed_when_dependency_done(tmp_path: Path) -> None:
     from sdlc.io import Paths, write_model
-    from sdlc.engine import request_transition
+    from sdlc.engine import request_transition, _write_ready_acceptance_snapshot
 
     paths = Paths(tmp_path)
     bead_a = Bead(
@@ -760,6 +824,7 @@ def test_start_allowed_when_dependency_done(tmp_path: Path) -> None:
     )
     write_model(paths.bead_path(bead_a.bead_id), bead_a)
     write_model(paths.bead_path(bead_b.bead_id), bead_b)
+    _write_ready_acceptance_snapshot(paths, bead_a)
     grounding = GroundingBundle(
         schema_name="sdlc.grounding_bundle",
         schema_version=1,
@@ -780,7 +845,7 @@ def test_start_allowed_when_dependency_done(tmp_path: Path) -> None:
 
 def test_spec_gate_requires_openspec_ref_file_for_implementation(tmp_path: Path) -> None:
     from sdlc.io import Paths, write_model
-    from sdlc.engine import request_transition
+    from sdlc.engine import request_transition, _write_ready_acceptance_snapshot
 
     paths = Paths(tmp_path)
     bead_id = "work-abc123"
@@ -801,6 +866,7 @@ def test_spec_gate_requires_openspec_ref_file_for_implementation(tmp_path: Path)
         openspec_ref=ArtifactLink(artifact_type="openspec_ref", artifact_id="openspec-abc123"),
     )
     write_model(paths.bead_path(bead_id), bead)
+    _write_ready_acceptance_snapshot(paths, bead)
     grounding = GroundingBundle(
         schema_name="sdlc.grounding_bundle",
         schema_version=1,
@@ -823,7 +889,7 @@ def test_spec_gate_requires_openspec_ref_file_for_implementation(tmp_path: Path)
 
 def test_spec_gate_passes_when_openspec_ref_approved(tmp_path: Path) -> None:
     from sdlc.io import Paths, write_model
-    from sdlc.engine import request_transition
+    from sdlc.engine import request_transition, _write_ready_acceptance_snapshot
 
     paths = Paths(tmp_path)
     bead_id = "work-abc123"
@@ -844,6 +910,7 @@ def test_spec_gate_passes_when_openspec_ref_approved(tmp_path: Path) -> None:
         openspec_ref=ArtifactLink(artifact_type="openspec_ref", artifact_id="openspec-abc123"),
     )
     write_model(paths.bead_path(bead_id), bead)
+    _write_ready_acceptance_snapshot(paths, bead)
     grounding = GroundingBundle(
         schema_name="sdlc.grounding_bundle",
         schema_version=1,
@@ -876,7 +943,7 @@ def test_spec_gate_passes_when_openspec_ref_approved(tmp_path: Path) -> None:
 
 def test_spec_gate_rejects_openspec_ref_mismatch(tmp_path: Path) -> None:
     from sdlc.io import Paths, write_model
-    from sdlc.engine import request_transition
+    from sdlc.engine import request_transition, _write_ready_acceptance_snapshot
 
     paths = Paths(tmp_path)
     bead_id = "work-abc123"
@@ -897,6 +964,7 @@ def test_spec_gate_rejects_openspec_ref_mismatch(tmp_path: Path) -> None:
         openspec_ref=ArtifactLink(artifact_type="openspec_ref", artifact_id="openspec-A"),
     )
     write_model(paths.bead_path(bead_id), bead)
+    _write_ready_acceptance_snapshot(paths, bead)
     grounding = GroundingBundle(
         schema_name="sdlc.grounding_bundle",
         schema_version=1,

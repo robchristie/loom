@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
+from pathlib import Path
 from typing import Iterable, Optional
 
 from .codec import sha256_canonical_json
 from .io import (
     Paths,
+    ensure_parent,
     git_head,
     git_is_dirty,
     load_bead,
@@ -88,6 +91,36 @@ class GateResult:
 def canonical_hash_for_model(model: Bead | BeadReview | EvidenceBundle) -> HashRef:
     payload = model.model_dump(mode="json")
     return HashRef(hash=sha256_canonical_json(payload))
+
+
+def canonical_hash_for_acceptance_checks(checks: list[AcceptanceCheck]) -> HashRef:
+    payload = [item.model_dump(mode="json") for item in checks]
+    return HashRef(hash=sha256_canonical_json(payload))
+
+
+def _ready_acceptance_snapshot_path(paths: Paths, bead_id: str) -> Path:
+    return paths.bead_dir(bead_id) / "ready_acceptance_hash.json"
+
+
+def _write_ready_acceptance_snapshot(paths: Paths, bead: Bead) -> None:
+    snapshot_path = _ready_acceptance_snapshot_path(paths, bead.bead_id)
+    payload = {
+        "bead_id": bead.bead_id,
+        "acceptance_checks_hash": canonical_hash_for_acceptance_checks(bead.acceptance_checks).hash,
+        "bead_hash": canonical_hash_for_model(bead).hash,
+    }
+    ensure_parent(snapshot_path)
+    snapshot_path.write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _load_ready_acceptance_snapshot(paths: Paths, bead_id: str) -> Optional[dict[str, str]]:
+    snapshot_path = _ready_acceptance_snapshot_path(paths, bead_id)
+    if not snapshot_path.exists():
+        return None
+    return json.loads(snapshot_path.read_text(encoding="utf-8"))
 
 
 def ensure_bead_artifact_id(bead: Bead) -> Optional[str]:
@@ -281,12 +314,20 @@ def request_transition(paths: Paths, bead_id: str, transition: str, actor: Actor
             errors.append(review_error)
         else:
             apply_acceptance_checks_from_review(bead, review)
+            _write_ready_acceptance_snapshot(paths, bead)
     elif bead.status == BeadStatus.ready and to_status == BeadStatus.in_progress.value:
         review = load_bead_review(paths, bead_id)
         if review and not acceptance_checks_equal(
             bead.acceptance_checks, review.tightened_acceptance_checks
         ):
             errors.append("Acceptance checks changed after ready")
+        snapshot = _load_ready_acceptance_snapshot(paths, bead_id)
+        if snapshot is None:
+            errors.append("Acceptance checks snapshot missing after ready")
+        else:
+            expected_hash = snapshot.get("acceptance_checks_hash")
+            if expected_hash != canonical_hash_for_acceptance_checks(bead.acceptance_checks).hash:
+                errors.append("Acceptance checks changed after ready")
         dependency_result = _dependencies_gate(paths, bead)
         if not dependency_result.ok:
             errors.append(dependency_result.notes)
