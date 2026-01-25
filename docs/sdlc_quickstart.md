@@ -26,6 +26,11 @@ uv run sdlc evidence validate <bead_id>
 uv run sdlc evidence invalidate-if-stale <bead_id>
 ```
 
+Note:
+- `sdlc evidence validate` uses `expect_exit_code`
+- `ready -> in_progress` enforces dependencies
+- Spec gate requires `runs/<bead_id>/openspec_ref.json` for implementation work
+
 ## Grounding
 ```bash
 uv run sdlc grounding generate <bead_id>

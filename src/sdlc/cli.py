@@ -87,7 +87,6 @@ def schema_export(out: Path = Path("sdlc/schemas")) -> None:
 
 
 @app.command()
-@app.command()
 def request(
     bead_id: str,
     transition: str,

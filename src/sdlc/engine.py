@@ -78,6 +78,12 @@ class TransitionResult:
     phase: Optional[RunPhase] = None
 
 
+@dataclass
+class GateResult:
+    ok: bool
+    notes: str = ""
+
+
 def canonical_hash_for_model(model: Bead | BeadReview | EvidenceBundle) -> HashRef:
     payload = model.model_dump(mode="json")
     return HashRef(hash=sha256_canonical_json(payload))
@@ -119,6 +125,16 @@ def _require_review_for_ready(bead: Bead, review: Optional[BeadReview]) -> Optio
     return None
 
 
+def _phase_for_transition(from_status: str, to_status: str) -> RunPhase:
+    if to_status in {"sized", "ready"}:
+        return RunPhase.plan
+    if to_status in {"in_progress", "verification_pending"}:
+        return RunPhase.implement
+    if to_status in {"verified", "approval_pending", "done"}:
+        return RunPhase.verify
+    return RunPhase.implement
+
+
 def _spec_gate(paths: Paths, bead: Bead) -> Optional[str]:
     if bead.bead_type != BeadType.implementation:
         return None
@@ -127,13 +143,14 @@ def _spec_gate(paths: Paths, bead: Bead) -> Optional[str]:
     if bead.openspec_ref.artifact_type != "openspec_ref":
         return "Bead.openspec_ref must reference openspec_ref artifact"
     ref_path = paths.bead_dir(bead.bead_id) / "openspec_ref.json"
-    if ref_path.exists():
-        try:
-            ref = OpenSpecRef.model_validate_json(ref_path.read_text(encoding="utf-8"))
-        except Exception as exc:  # noqa: BLE001
-            return f"OpenSpecRef invalid: {exc}"
-        if ref.state != OpenSpecState.approved:
-            return "OpenSpecRef not approved"
+    if not ref_path.exists():
+        return "OpenSpecRef artifact missing (runs/<bead_id>/openspec_ref.json); run grounding/spec sync"
+    try:
+        ref = OpenSpecRef.model_validate_json(ref_path.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        return f"OpenSpecRef invalid: {exc}"
+    if ref.state != OpenSpecState.approved:
+        return "OpenSpecRef not approved"
     return None
 
 
@@ -180,6 +197,23 @@ def _approval_gate(paths: Paths, bead: Bead) -> Optional[str]:
     return "Approval DecisionLedgerEntry missing"
 
 
+def _dependencies_gate(paths: Paths, bead: Bead) -> GateResult:
+    if not bead.depends_on:
+        return GateResult(True, "")
+    blockers: list[str] = []
+    for dependency_id in bead.depends_on:
+        try:
+            dependency = load_bead(paths, dependency_id)
+        except FileNotFoundError:
+            blockers.append(f"{dependency_id} (missing)")
+            continue
+        if dependency.status != BeadStatus.done:
+            blockers.append(f"{dependency_id} ({dependency.status.value})")
+    if blockers:
+        return GateResult(False, "Dependencies not done: " + ", ".join(blockers))
+    return GateResult(True, "")
+
+
 def _apply_transition(bead: Bead, new_status: BeadStatus) -> None:
     bead.status = new_status
 
@@ -199,17 +233,28 @@ def request_transition(paths: Paths, bead_id: str, transition: str, actor: Actor
     from_status = from_status.strip()
     to_status = to_status.strip()
     if from_status != bead.status.value:
-        return TransitionResult(False, "Illegal transition", phase=phase_hint)
+        return TransitionResult(
+            False,
+            (
+                "Illegal transition: bead is "
+                f"'{bead.status.value}', request was '{from_status} -> {to_status}'"
+            ),
+            phase=_phase_for_transition(from_status, to_status),
+        )
     if not allowed_transition(from_status, to_status):
-        return TransitionResult(False, "Illegal transition", phase=phase_hint)
+        return TransitionResult(
+            False,
+            f"Illegal transition: '{from_status} -> {to_status}' is not allowed",
+            phase=_phase_for_transition(from_status, to_status),
+        )
 
     authority = TRANSITION_AUTHORITY.get((from_status, to_status))
     if authority is not None and actor.kind not in authority:
         return TransitionResult(
             False,
             (
-                f"Authority violation: {actor.kind} may not request {from_status} -> {to_status} "
-                f"(requires {sorted(authority)})"
+                f"Authority violation: {actor.kind} may not request '{from_status}->{to_status}' "
+                f"(requires: {sorted(authority)})"
             ),
             phase=phase_hint,
         )
@@ -235,6 +280,9 @@ def request_transition(paths: Paths, bead_id: str, transition: str, actor: Actor
             bead.acceptance_checks, review.tightened_acceptance_checks
         ):
             errors.append("Acceptance checks changed after ready")
+        dependency_result = _dependencies_gate(paths, bead)
+        if not dependency_result.ok:
+            errors.append(dependency_result.notes)
         spec_error = _spec_gate(paths, bead)
         if spec_error:
             errors.append(spec_error)
@@ -339,19 +387,20 @@ def evidence_validation_errors(
     errors.extend(coverage_errors)
 
     for check in bead.acceptance_checks:
-        matching = [item for item in evidence.items if item.command == check.command]
-        if not matching:
+        if getattr(check, "kind", "command") != "command":
+            continue
+        item = next((candidate for candidate in evidence.items if candidate.command == check.command), None)
+        if item is None:
             errors.append(f"Missing evidence for command check '{check.name}'")
             continue
-        for item in matching:
-            if item.exit_code is None:
-                errors.append(f"Evidence item {item.name} missing exit_code")
-                continue
-            if item.exit_code != check.expect_exit_code:
-                errors.append(
-                    f"Evidence item {item.name} exit_code {item.exit_code} "
-                    f"!= expected {check.expect_exit_code}"
-                )
+        if item.exit_code is None:
+            errors.append(f"Evidence item {item.name} missing exit_code")
+            continue
+        if item.exit_code != check.expect_exit_code:
+            errors.append(
+                f"Evidence item {item.name} expected exit_code {check.expect_exit_code} "
+                f"got {item.exit_code}"
+            )
 
     return errors
 
