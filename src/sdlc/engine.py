@@ -52,6 +52,10 @@ TRANSITIONS: dict[str, str] = {
     "approval_pending": "done",
 }
 
+TRANSITION_AUTHORITY: dict[tuple[BeadStatus, BeadStatus], set[str]] = {
+    (BeadStatus.verification_pending, BeadStatus.verified): {"system"},
+}
+
 TERMINAL_STATES = {
     BeadStatus.done.value,
     BeadStatus.failed.value,
@@ -189,6 +193,14 @@ def request_transition(paths: Paths, bead_id: str, transition: str, actor: Actor
         return TransitionResult(False, "Illegal transition")
     if not allowed_transition(from_status, to_status):
         return TransitionResult(False, "Illegal transition")
+
+    authority = TRANSITION_AUTHORITY.get((BeadStatus(from_status), BeadStatus(to_status)))
+    if authority is not None and actor.kind not in authority:
+        return TransitionResult(
+            False,
+            f"Authority violation: {actor.kind} may not request {from_status} -> {to_status} "
+            f"(requires {sorted(authority)})",
+        )
 
     errors: list[str] = []
 

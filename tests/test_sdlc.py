@@ -167,6 +167,35 @@ def test_illegal_transition_record_shape(tmp_path: Path) -> None:
     assert record.notes_md
 
 
+def test_transition_authority_system_only(tmp_path: Path) -> None:
+    from sdlc.engine import request_transition
+    from sdlc.io import Paths, write_model
+
+    paths = Paths(tmp_path)
+
+    bead_id = "work-abc123"
+    bead = Bead(
+        schema_name="sdlc.bead",
+        schema_version=1,
+        artifact_id=bead_id,
+        created_at=_now(),
+        created_by=Actor(kind="system", name="tester"),
+        bead_id=bead_id,
+        title="Test",
+        bead_type=BeadType.implementation,
+        status=BeadStatus.verification_pending,
+        requirements_md="req",
+        acceptance_criteria_md="acc",
+        context_md="ctx",
+        acceptance_checks=[],
+    )
+    write_model(paths.bead_path(bead_id), bead)
+    actor = Actor(kind="agent", name="tester")
+    result = request_transition(paths, bead_id, "verification_pending -> verified", actor)
+    assert not result.ok
+    assert "Authority violation" in result.notes
+
+
 def test_request_records_phase_from_transition(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from sdlc.io import Paths, write_model
 
