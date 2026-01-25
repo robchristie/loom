@@ -36,7 +36,7 @@ from sdlc.models import (
     OpenSpecState,
     Subsystem,
 )
-from sdlc.cli import approve, evidence_validate, openspec_sync, request
+from sdlc.cli import abort, approve, evidence_validate, openspec_sync, request
 
 
 def _now() -> datetime:
@@ -1759,3 +1759,45 @@ def test_openspec_sync_writes_runs_openspec_ref(tmp_path: Path, monkeypatch: pyt
     assert out_path.exists()
     loaded = OpenSpecRef.model_validate_json(out_path.read_text(encoding="utf-8"))
     assert loaded.artifact_id == "openspec-abc123"
+
+
+def test_abort_command_transitions_and_records_decision(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from sdlc.io import Paths, load_decision_ledger, load_execution_records, write_model
+
+    monkeypatch.chdir(tmp_path)
+    paths = Paths(Path.cwd())
+    _write_boundary_registry(paths)
+    bead_id = "work-abc123"
+    bead = Bead(
+        schema_name="sdlc.bead",
+        schema_version=1,
+        artifact_id=bead_id,
+        created_at=_now(),
+        created_by=Actor(kind="system", name="tester"),
+        bead_id=bead_id,
+        title="Test",
+        bead_type=BeadType.discovery,
+        status=BeadStatus.in_progress,
+        requirements_md="req",
+        acceptance_criteria_md="acc",
+        context_md="ctx",
+        acceptance_checks=[],
+    )
+    write_model(paths.bead_path(bead_id), bead)
+
+    abort(bead_id, reason="needs discovery", actor_kind="human", actor_name="tester")
+
+    updated = Bead.model_validate_json(paths.bead_path(bead_id).read_text(encoding="utf-8"))
+    assert updated.status == BeadStatus.aborted_needs_discovery
+
+    entries = list(load_decision_ledger(paths))
+    assert entries
+    assert entries[-1].decision_type == DecisionType.scope_change
+    assert entries[-1].summary.startswith("ABORT:")
+
+    records = load_execution_records(paths)
+    assert records
+    last = records[-1]
+    assert last.applied_transition == "in_progress -> aborted:needs-discovery"

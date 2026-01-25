@@ -989,3 +989,19 @@ def create_approval_entry(bead_id: str, summary: str, actor: Actor) -> DecisionL
         decision_type=DecisionType.approval,
         summary=summary,
     )
+
+
+def create_abort_entry(bead_id: str, reason: str, actor: Actor) -> DecisionLedgerEntry:
+    summary = reason.strip()
+    if not summary.startswith("ABORT:"):
+        summary = f"ABORT: {summary}"
+    return DecisionLedgerEntry(
+        artifact_id=f"decision-{bead_id}-{int(now_utc().timestamp())}",
+        created_at=now_utc(),
+        created_by=actor,
+        schema_name="sdlc.decision_ledger_entry",
+        schema_version=1,
+        bead_id=bead_id,
+        decision_type=DecisionType.scope_change,
+        summary=summary,
+    )

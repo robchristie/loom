@@ -12,6 +12,7 @@ from .engine import (
     append_decision_entry,
     build_execution_record,
     collect_evidence_skeleton,
+    create_abort_entry,
     create_approval_entry,
     generate_grounding_bundle,
     invalidate_evidence_if_stale,
@@ -20,7 +21,7 @@ from .engine import (
     validate_evidence_bundle,
 )
 from .io import Paths, git_head, git_is_dirty, load_bead, load_evidence, write_model
-from .models import Actor, FileRef, GitRef, OpenSpecRef, RunPhase, schema_registry
+from .models import Actor, BeadStatus, FileRef, GitRef, OpenSpecRef, RunPhase, schema_registry
 
 
 app = typer.Typer(add_completion=False)
@@ -185,6 +186,27 @@ def approve(bead_id: str, summary: str = typer.Option(..., "--summary")) -> None
         typer.echo('Warning: summary should start with "APPROVAL:"', err=True)
     entry = create_approval_entry(bead_id, summary, actor)
     append_decision_entry(paths, entry)
+
+
+@app.command()
+def abort(
+    bead_id: str,
+    reason: str = typer.Option(..., "--reason"),
+    actor_kind: str = typer.Option("human", "--actor-kind"),
+    actor_name: str = typer.Option(os.getenv("USER", "unknown"), "--actor-name"),
+) -> None:
+    paths = Paths(Path.cwd())
+    actor = Actor(kind=actor_kind, name=actor_name)
+    entry = create_abort_entry(bead_id, reason, actor)
+    append_decision_entry(paths, entry)
+    bead = load_bead(paths, bead_id)
+    requested = f"{bead.status.value} -> {BeadStatus.aborted_needs_discovery.value}"
+    result = request_transition(paths, bead_id, requested, actor)
+    record_transition_attempt(
+        paths, bead_id, _phase_for_transition(requested), actor, requested, result
+    )
+    if not result.ok:
+        raise typer.Exit(code=1)
 
 
 @openspec_app.command("sync")

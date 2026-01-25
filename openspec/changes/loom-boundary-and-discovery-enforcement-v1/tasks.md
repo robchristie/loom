@@ -32,7 +32,7 @@
   - [x] If files_touched > max_files_touched or len(touched_subsystems) > max_subsystems_touched:
     - [x] reject transition with message requiring abort/split
     - [x] write an ExecutionRecord describing metrics + policy thresholds
-    - [ ] (optional minimal helper) `sdlc abort <bead_id> --reason ...` that appends a DecisionLedgerEntry and requests the abort transition
+    - [x] (optional minimal helper) `sdlc abort <bead_id> --reason ...` that appends a DecisionLedgerEntry and requests the abort transition
 
 ## 5) Discovery bead Policy A gate
 - For BeadType.discovery:
