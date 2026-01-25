@@ -29,4 +29,4 @@ Use ArtifactLink:
   - negative: exception bead with no exception entry -> start transition rejected and journal record has no applied_transition.
 
 ## 4) Docs (optional but recommended)
-- [ ] Add a short paragraph in docs/loom-specification.md describing that ExecutionRecord.links will include approval/exception decision links. (tracked in work-xi2)
+- [x] Add a short paragraph in docs/loom-specification.md describing that ExecutionRecord.links will include approval/exception decision links. (tracked in work-xi2)

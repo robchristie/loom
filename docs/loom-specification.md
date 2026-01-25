@@ -292,6 +292,11 @@ If `Bead.execution_profile == exception`, the bead MUST NOT transition to `in_pr
 
 The engine MUST link the decision entry from the transition `ExecutionRecord`.
 
+ExecutionRecord Decision Links (Normative)
+When transitions rely on approval or exception decisions, the engine MUST include a
+`decision_ledger_entry` link in the successful transition `ExecutionRecord` that references the
+decision artifact.
+
 ---
 
 8. Bead sizing + tractability (normative)
