@@ -63,6 +63,36 @@ def test_hash_deterministic() -> None:
     assert first == second
 
 
+def test_grounding_generate_writes_bundle(tmp_path: Path) -> None:
+    from sdlc.engine import generate_grounding_bundle
+    from sdlc.io import Paths, write_model
+
+    paths = Paths(tmp_path)
+    bead_id = "work-abc123"
+    bead = Bead(
+        schema_name="sdlc.bead",
+        schema_version=1,
+        artifact_id=bead_id,
+        created_at=_now(),
+        created_by=Actor(kind="system", name="tester"),
+        bead_id=bead_id,
+        title="Test",
+        bead_type=BeadType.implementation,
+        status=BeadStatus.draft,
+        requirements_md="req",
+        acceptance_criteria_md="acc",
+        context_md="ctx",
+        acceptance_checks=[],
+    )
+    write_model(paths.bead_path(bead_id), bead)
+
+    generate_grounding_bundle(paths, bead_id, Actor(kind="system", name="tester"))
+
+    grounding_path = paths.grounding_path(bead_id)
+    assert grounding_path.exists()
+    GroundingBundle.model_validate_json(grounding_path.read_text(encoding="utf-8"))
+
+
 def test_manual_check_requires_human_summary() -> None:
     bead = Bead(
         schema_name="sdlc.bead",
