@@ -75,6 +75,7 @@ class TransitionResult:
     ok: bool
     notes: str
     applied_transition: Optional[str] = None
+    phase: Optional[RunPhase] = None
 
 
 def canonical_hash_for_model(model: Bead | BeadReview | EvidenceBundle) -> HashRef:
@@ -185,14 +186,22 @@ def _apply_transition(bead: Bead, new_status: BeadStatus) -> None:
 
 def request_transition(paths: Paths, bead_id: str, transition: str, actor: Actor) -> TransitionResult:
     bead = load_bead(paths, bead_id)
+    phase_hint = RunPhase.plan if bead.status in {BeadStatus.draft, BeadStatus.sized} else RunPhase.implement
+    if bead.status in {
+        BeadStatus.verification_pending,
+        BeadStatus.verified,
+        BeadStatus.approval_pending,
+        BeadStatus.done,
+    }:
+        phase_hint = RunPhase.verify
 
     from_status, _, to_status = transition.partition("->")
     from_status = from_status.strip()
     to_status = to_status.strip()
     if from_status != bead.status.value:
-        return TransitionResult(False, "Illegal transition")
+        return TransitionResult(False, "Illegal transition", phase=phase_hint)
     if not allowed_transition(from_status, to_status):
-        return TransitionResult(False, "Illegal transition")
+        return TransitionResult(False, "Illegal transition", phase=phase_hint)
 
     authority = TRANSITION_AUTHORITY.get((from_status, to_status))
     if authority is not None and actor.kind not in authority:
@@ -202,6 +211,7 @@ def request_transition(paths: Paths, bead_id: str, transition: str, actor: Actor
                 f"Authority violation: {actor.kind} may not request {from_status} -> {to_status} "
                 f"(requires {sorted(authority)})"
             ),
+            phase=phase_hint,
         )
 
     errors: list[str] = []
@@ -250,11 +260,11 @@ def request_transition(paths: Paths, bead_id: str, transition: str, actor: Actor
         pass
 
     if errors:
-        return TransitionResult(False, "; ".join(errors))
+        return TransitionResult(False, "; ".join(errors), phase=phase_hint)
 
     _apply_transition(bead, BeadStatus(to_status))
     write_model(paths.bead_path(bead_id), bead)
-    return TransitionResult(True, "", applied_transition=f"{from_status} -> {to_status}")
+    return TransitionResult(True, "", applied_transition=f"{from_status} -> {to_status}", phase=phase_hint)
 
 
 def build_execution_record(
@@ -502,10 +512,11 @@ def record_transition_attempt(
     requested: str,
     result: TransitionResult,
 ) -> ExecutionRecord:
+    phase_value = result.phase or phase
     git_ref = GitRef(head_before=git_head(paths), dirty_before=git_is_dirty(paths))
     record = build_execution_record(
         bead_id,
-        phase,
+        phase_value,
         actor,
         requested_transition=requested,
         applied_transition=result.applied_transition if result.ok else None,
