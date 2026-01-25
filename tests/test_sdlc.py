@@ -9,7 +9,7 @@ import typer
 from pydantic import ValidationError
 
 from sdlc.codec import sha256_canonical_json
-from sdlc.engine import acceptance_coverage_errors
+from sdlc.engine import acceptance_coverage_errors, canonical_hash_for_model
 from sdlc.models import (
     Actor,
     AcceptanceCheck,
@@ -21,6 +21,7 @@ from sdlc.models import (
     EvidenceItem,
     EvidenceStatus,
     EvidenceType,
+    HashRef,
 )
 from sdlc.cli import approve, request
 
@@ -331,9 +332,91 @@ def test_validate_evidence_allows_nonzero_expected_exit_code(tmp_path: Path) -> 
         created_by=Actor(kind="system", name="tester"),
         bead_id=bead_id,
         status=EvidenceStatus.collected,
+        for_bead_hash=canonical_hash_for_model(bead),
         items=[EvidenceItem(name="cmd", evidence_type=EvidenceType.test_run, command="run", exit_code=2)],
     )
     write_model(paths.bead_path(bead_id), bead)
     write_model(paths.evidence_path(bead_id), evidence)
     _, errors = validate_evidence_bundle(paths, bead_id, Actor(kind="system", name="tester"))
     assert not errors
+
+
+def test_evidence_validate_rejects_bead_hash_mismatch(tmp_path: Path) -> None:
+    from sdlc.io import Paths, write_model
+    from sdlc.engine import validate_evidence_bundle
+
+    paths = Paths(tmp_path)
+    bead_id = "work-abc123"
+    bead = Bead(
+        schema_name="sdlc.bead",
+        schema_version=1,
+        artifact_id=bead_id,
+        created_at=_now(),
+        created_by=Actor(kind="system", name="tester"),
+        bead_id=bead_id,
+        title="Test",
+        bead_type=BeadType.implementation,
+        status=BeadStatus.verification_pending,
+        requirements_md="req",
+        acceptance_criteria_md="acc",
+        context_md="ctx",
+        acceptance_checks=[AcceptanceCheck(name="cmd", command="run", expect_exit_code=0)],
+    )
+    evidence = EvidenceBundle(
+        schema_name="sdlc.evidence_bundle",
+        schema_version=1,
+        artifact_id="evidence-abc123",
+        created_at=_now(),
+        created_by=Actor(kind="system", name="tester"),
+        bead_id=bead_id,
+        status=EvidenceStatus.collected,
+        for_bead_hash=HashRef(hash_alg="sha256", hash="0" * 64),
+        items=[EvidenceItem(name="cmd", evidence_type=EvidenceType.test_run, command="run", exit_code=0)],
+    )
+    write_model(paths.bead_path(bead_id), bead)
+    write_model(paths.evidence_path(bead_id), evidence)
+    evidence_after, errors = validate_evidence_bundle(paths, bead_id, Actor(kind="system", name="tester"))
+    assert evidence_after is not None
+    assert evidence_after.status == EvidenceStatus.collected
+    assert any("bead hash" in error for error in errors)
+
+
+def test_evidence_validate_sets_status_validated_on_success(tmp_path: Path) -> None:
+    from sdlc.io import Paths, write_model
+    from sdlc.engine import validate_evidence_bundle, canonical_hash_for_model
+
+    paths = Paths(tmp_path)
+    bead_id = "work-abc123"
+    bead = Bead(
+        schema_name="sdlc.bead",
+        schema_version=1,
+        artifact_id=bead_id,
+        created_at=_now(),
+        created_by=Actor(kind="system", name="tester"),
+        bead_id=bead_id,
+        title="Test",
+        bead_type=BeadType.implementation,
+        status=BeadStatus.verification_pending,
+        requirements_md="req",
+        acceptance_criteria_md="acc",
+        context_md="ctx",
+        acceptance_checks=[AcceptanceCheck(name="cmd", command="run", expect_exit_code=0)],
+    )
+    bead_hash = canonical_hash_for_model(bead)
+    evidence = EvidenceBundle(
+        schema_name="sdlc.evidence_bundle",
+        schema_version=1,
+        artifact_id="evidence-abc123",
+        created_at=_now(),
+        created_by=Actor(kind="system", name="tester"),
+        bead_id=bead_id,
+        status=EvidenceStatus.collected,
+        for_bead_hash=bead_hash,
+        items=[EvidenceItem(name="cmd", evidence_type=EvidenceType.test_run, command="run", exit_code=0)],
+    )
+    write_model(paths.bead_path(bead_id), bead)
+    write_model(paths.evidence_path(bead_id), evidence)
+    evidence_after, errors = validate_evidence_bundle(paths, bead_id, Actor(kind="system", name="tester"))
+    assert evidence_after is not None
+    assert not errors
+    assert evidence_after.status == EvidenceStatus.validated

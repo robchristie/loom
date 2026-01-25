@@ -320,9 +320,10 @@ def evidence_validation_errors(
                 errors.append("Manual check evidence requires summary_md")
 
     bead_hash = canonical_hash_for_model(bead)
-    if evidence.status == EvidenceStatus.validated:
-        if evidence.for_bead_hash is None or evidence.for_bead_hash.hash != bead_hash.hash:
-            errors.append("Evidence for_bead_hash does not match bead hash")
+    if evidence.for_bead_hash is None:
+        errors.append("EvidenceBundle.for_bead_hash missing")
+    elif evidence.for_bead_hash.hash != bead_hash.hash:
+        errors.append("EvidenceBundle.for_bead_hash does not match bead hash; evidence is stale")
 
     coverage_errors = acceptance_coverage_errors(bead, evidence, decision_entries)
     errors.extend(coverage_errors)
