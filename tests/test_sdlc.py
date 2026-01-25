@@ -220,7 +220,7 @@ def test_request_records_phase_from_transition(tmp_path: Path, monkeypatch: pyte
     )
     write_model(paths.bead_path(bead_id), bead)
 
-    request(bead_id, "draft -> sized")
+    request(bead_id, "draft -> sized", actor_kind="system", actor_name="tester")
 
     journal_path = paths.runs_dir / "journal.jsonl"
     lines = journal_path.read_text(encoding="utf-8").splitlines()
@@ -235,3 +235,31 @@ def test_approve_requires_prefix(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     with pytest.raises(typer.Exit) as exc:
         approve("work-abc123", summary="Looks good to me")
     assert exc.value.exit_code == 2
+
+
+def test_authority_blocks_system_only_transition_for_human(tmp_path: Path) -> None:
+    from sdlc.io import Paths, write_model
+    from sdlc.engine import request_transition
+
+    paths = Paths(tmp_path)
+    bead_id = "work-abc123"
+    bead = Bead(
+        schema_name="sdlc.bead",
+        schema_version=1,
+        artifact_id=bead_id,
+        created_at=_now(),
+        created_by=Actor(kind="system", name="tester"),
+        bead_id=bead_id,
+        title="Test",
+        bead_type=BeadType.implementation,
+        status=BeadStatus.verification_pending,
+        requirements_md="req",
+        acceptance_criteria_md="acc",
+        context_md="ctx",
+        acceptance_checks=[],
+    )
+    write_model(paths.bead_path(bead_id), bead)
+    actor = Actor(kind="human", name="tester")
+    result = request_transition(paths, bead_id, "verification_pending -> verified", actor)
+    assert result.ok is False
+    assert "Authority violation" in result.notes

@@ -52,10 +52,6 @@ TRANSITIONS: dict[str, str] = {
     "approval_pending": "done",
 }
 
-TRANSITION_AUTHORITY: dict[tuple[BeadStatus, BeadStatus], set[str]] = {
-    (BeadStatus.verification_pending, BeadStatus.verified): {"system"},
-}
-
 TERMINAL_STATES = {
     BeadStatus.done.value,
     BeadStatus.failed.value,
@@ -67,6 +63,10 @@ FAILURE_TARGETS = {
     BeadStatus.aborted_needs_discovery.value,
     BeadStatus.failed.value,
     BeadStatus.superseded.value,
+}
+
+TRANSITION_AUTHORITY: dict[tuple[str, str], set[str]] = {
+    (BeadStatus.verification_pending.value, BeadStatus.verified.value): {"system"},
 }
 
 
@@ -194,12 +194,14 @@ def request_transition(paths: Paths, bead_id: str, transition: str, actor: Actor
     if not allowed_transition(from_status, to_status):
         return TransitionResult(False, "Illegal transition")
 
-    authority = TRANSITION_AUTHORITY.get((BeadStatus(from_status), BeadStatus(to_status)))
+    authority = TRANSITION_AUTHORITY.get((from_status, to_status))
     if authority is not None and actor.kind not in authority:
         return TransitionResult(
             False,
-            f"Authority violation: {actor.kind} may not request {from_status} -> {to_status} "
-            f"(requires {sorted(authority)})",
+            (
+                f"Authority violation: {actor.kind} may not request {from_status} -> {to_status} "
+                f"(requires {sorted(authority)})"
+            ),
         )
 
     errors: list[str] = []
@@ -325,9 +327,20 @@ def evidence_validation_errors(
     coverage_errors = acceptance_coverage_errors(bead, evidence, decision_entries)
     errors.extend(coverage_errors)
 
-    for item in evidence.items:
-        if item.command and item.exit_code is not None and item.exit_code != 0:
-            errors.append(f"Evidence item {item.name} has non-zero exit code")
+    for check in bead.acceptance_checks:
+        matching = [item for item in evidence.items if item.command == check.command]
+        if not matching:
+            errors.append(f"Missing evidence for command check '{check.name}'")
+            continue
+        for item in matching:
+            if item.exit_code is None:
+                errors.append(f"Evidence item {item.name} missing exit_code")
+                continue
+            if item.exit_code != check.expect_exit_code:
+                errors.append(
+                    f"Evidence item {item.name} exit_code {item.exit_code} "
+                    f"!= expected {check.expect_exit_code}"
+                )
 
     return errors
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 import typer
@@ -86,9 +87,15 @@ def schema_export(out: Path = Path("sdlc/schemas")) -> None:
 
 
 @app.command()
-def request(bead_id: str, transition: str) -> None:
+@app.command()
+def request(
+    bead_id: str,
+    transition: str,
+    actor_kind: str = typer.Option("human", "--actor-kind"),
+    actor_name: str = typer.Option(os.getenv("USER", "unknown"), "--actor-name"),
+) -> None:
     paths = Paths(Path.cwd())
-    actor = Actor(kind="system", name="sdlc")
+    actor = Actor(kind=actor_kind, name=actor_name)
     result = request_transition(paths, bead_id, transition, actor)
     phase = _phase_for_transition(transition)
     record_transition_attempt(paths, bead_id, phase, actor, transition, result)
