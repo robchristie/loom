@@ -1,5 +1,5 @@
 The master specification for this project (LOOM) is in docs/loom-specification.md
-Pydantic-AI llms in docs/pydantic-ai-llms.txt
+Pydantic-AI llms in reference/pydantic-ai-llms.txt
 Python env is managed with `uv`. Use `uv run` for things like pytest.
 
 <!-- OPENSPEC:START -->
