@@ -14,8 +14,10 @@ from .engine import (
     collect_evidence_skeleton,
     create_abort_entry,
     create_approval_entry,
+    decision_ledger_link,
     generate_grounding_bundle,
     invalidate_evidence_if_stale,
+    record_decision_action,
     record_transition_attempt,
     request_transition,
     validate_evidence_bundle,
@@ -47,6 +49,13 @@ def _phase_for_transition(transition: str) -> RunPhase:
         return RunPhase.verify
 
     return RunPhase.implement
+
+
+def _decision_action_phase(paths: Paths, bead_id: str) -> RunPhase:
+    bead = load_bead(paths, bead_id)
+    if bead.status in {BeadStatus.draft, BeadStatus.sized, BeadStatus.ready}:
+        return RunPhase.plan
+    return RunPhase.verify
 
 
 @app.command()
@@ -199,11 +208,24 @@ def abort(
     actor = Actor(kind=actor_kind, name=actor_name)
     entry = create_abort_entry(bead_id, reason, actor)
     append_decision_entry(paths, entry)
+    record_decision_action(
+        paths,
+        entry,
+        _decision_action_phase(paths, bead_id),
+        actor,
+        notes_md="Abort requested",
+    )
     bead = load_bead(paths, bead_id)
     requested = f"{bead.status.value} -> {BeadStatus.aborted_needs_discovery.value}"
     result = request_transition(paths, bead_id, requested, actor)
     record_transition_attempt(
-        paths, bead_id, _phase_for_transition(requested), actor, requested, result
+        paths,
+        bead_id,
+        _phase_for_transition(requested),
+        actor,
+        requested,
+        result,
+        extra_links=[decision_ledger_link(entry)],
     )
     if not result.ok:
         raise typer.Exit(code=1)

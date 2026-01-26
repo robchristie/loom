@@ -35,6 +35,7 @@ from .models import (
     BeadType,
     DecisionLedgerEntry,
     DecisionType,
+    EffortBucket,
     EvidenceBundle,
     EvidenceItem,
     EvidenceStatus,
@@ -86,6 +87,7 @@ class TransitionResult:
     applied_transition: Optional[str] = None
     phase: Optional[RunPhase] = None
     links: list[ArtifactLink] = field(default_factory=list)
+    auto_abort: bool = False
 
 
 @dataclass
@@ -225,6 +227,19 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _env_optional_int(name: str) -> Optional[int]:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return None
+    try:
+        value = int(raw)
+    except ValueError:
+        return None
+    if value <= 0:
+        return None
+    return value
+
+
 def _discovery_allowlist(default: str = "docs/,notes/,tools/,experiments/,runs/") -> list[str]:
     raw = os.getenv("SDLC_DISCOVERY_ALLOWLIST", default)
     items = []
@@ -338,6 +353,90 @@ def _require_review_for_ready(bead: Bead, review: Optional[BeadReview]) -> Optio
     if review.effort_bucket.value == "XL":
         return "BeadReview effort bucket XL not allowed"
     return None
+
+
+def _bucket_l_justification_decision(paths: Paths, bead_id: str) -> Optional[DecisionLedgerEntry]:
+    for entry in load_decision_ledger(paths):
+        if entry.bead_id != bead_id:
+            continue
+        if entry.decision_type not in {
+            DecisionType.assumption,
+            DecisionType.tradeoff,
+            DecisionType.scope_change,
+        }:
+            continue
+        if not entry.summary.strip():
+            continue
+        return entry
+    return None
+
+
+def _plan_gate_bucket_l(
+    paths: Paths, bead_id: str, review: Optional[BeadReview]
+) -> Optional[str]:
+    if review is None:
+        return None
+    if review.effort_bucket != EffortBucket.L:
+        return None
+    if review.split_required and review.split_proposal is not None:
+        return None
+    if _bucket_l_justification_decision(paths, bead_id) is not None:
+        return None
+    if review.split_required and review.split_proposal is None:
+        return "BeadReview split_required true but split_proposal missing for bucket L"
+    return (
+        "BeadReview effort bucket L requires split_required+split_proposal "
+        "or justification DecisionLedgerEntry"
+    )
+
+
+def _intervention_decision_types() -> set[DecisionType]:
+    return {
+        DecisionType.assumption,
+        DecisionType.tradeoff,
+        DecisionType.exception,
+        DecisionType.scope_change,
+    }
+
+
+def _count_interventions(paths: Paths, bead_id: str) -> int:
+    return sum(
+        1
+        for entry in load_decision_ledger(paths)
+        if entry.bead_id == bead_id and entry.decision_type in _intervention_decision_types()
+    )
+
+
+def _elapsed_minutes(bead: Bead) -> int:
+    delta = now_utc() - bead.created_at
+    seconds = max(0, int(delta.total_seconds()))
+    return seconds // 60
+
+
+def anti_stall_errors(paths: Paths, bead: Bead) -> list[str]:
+    errors: list[str] = []
+    max_elapsed = bead.max_elapsed_minutes
+    if max_elapsed is None:
+        max_elapsed = _env_optional_int("SDLC_MAX_ELAPSED_MINUTES_DEFAULT")
+    if max_elapsed is not None:
+        elapsed = _elapsed_minutes(bead)
+        if elapsed > max_elapsed:
+            errors.append(
+                f"Anti-stall: elapsed_minutes={elapsed} exceeds limit {max_elapsed}"
+            )
+    max_interventions = bead.max_interventions
+    if max_interventions is None:
+        max_interventions = _env_optional_int("SDLC_MAX_INTERVENTIONS_DEFAULT")
+    if max_interventions is not None:
+        interventions = _count_interventions(paths, bead.bead_id)
+        if interventions > max_interventions:
+            types = ", ".join(sorted(t.value for t in _intervention_decision_types()))
+            errors.append(
+                "Anti-stall: interventions="
+                f"{interventions} exceeds limit {max_interventions} "
+                f"(types={types})"
+            )
+    return errors
 
 
 def _phase_for_transition(from_status: str, to_status: str) -> RunPhase:
@@ -471,6 +570,7 @@ def request_transition(paths: Paths, bead_id: str, transition: str, actor: Actor
     links: list[ArtifactLink] = []
     boundary_eval: Optional[BoundaryEvaluation] = None
     changed_files: Optional[list[str]] = None
+    force_abort = False
 
     def ensure_boundary_eval() -> BoundaryEvaluation:
         nonlocal boundary_eval, changed_files
@@ -496,7 +596,10 @@ def request_transition(paths: Paths, bead_id: str, transition: str, actor: Actor
         review_error = _require_review_for_ready(bead, review)
         if review_error:
             errors.append(review_error)
-        else:
+        plan_error = _plan_gate_bucket_l(paths, bead_id, review)
+        if plan_error:
+            errors.append(plan_error)
+        if not errors:
             apply_acceptance_checks_from_review(bead, review)
             _write_ready_acceptance_snapshot(paths, bead)
     elif bead.status == BeadStatus.ready and to_status == BeadStatus.in_progress.value:
@@ -543,15 +646,19 @@ def request_transition(paths: Paths, bead_id: str, transition: str, actor: Actor
                 evaluation.files_touched > max_files
                 or len(evaluation.touched_subsystems) > max_subsystems
             ):
-                errors.append(
+                info_notes.append(
                     boundary_violation_notes(evaluation, max_files, max_subsystems)
                 )
-                errors.append(
-                    "Boundary limit exceeded: abort bead (aborted:needs-discovery) "
-                    "or split via BeadReview"
+                info_notes.append(
+                    "Boundary limit exceeded: forcing abort to aborted:needs-discovery"
                 )
+                force_abort = True
         except (FileNotFoundError, ValueError) as exc:
             errors.append(str(exc))
+        anti_stall = anti_stall_errors(paths, bead)
+        if anti_stall:
+            errors.extend(anti_stall)
+            errors.append("Anti-stall threshold exceeded: abort required")
     elif bead.status == BeadStatus.verified and to_status == BeadStatus.approval_pending.value:
         pass
     elif bead.status == BeadStatus.approval_pending and to_status == BeadStatus.done.value:
@@ -601,6 +708,18 @@ def request_transition(paths: Paths, bead_id: str, transition: str, actor: Actor
         extra = "; ".join(info_notes)
         notes = f"{notes}; {extra}".strip("; ").strip()
 
+    if force_abort:
+        _apply_transition(bead, BeadStatus.aborted_needs_discovery)
+        write_model(paths.bead_path(bead_id), bead)
+        return TransitionResult(
+            True,
+            notes,
+            applied_transition=f"{from_status} -> {BeadStatus.aborted_needs_discovery.value}",
+            phase=phase_hint,
+            links=links,
+            auto_abort=True,
+        )
+
     if errors:
         return TransitionResult(False, notes, phase=phase_hint, links=links)
 
@@ -643,6 +762,53 @@ def build_execution_record(
         schema_name="sdlc.execution_record",
         schema_version=1,
     )
+
+
+def decision_ledger_link(entry: DecisionLedgerEntry) -> ArtifactLink:
+    return ArtifactLink(
+        artifact_type="decision_ledger_entry",
+        artifact_id=entry.artifact_id,
+        schema_name="sdlc.decision_ledger_entry",
+        schema_version=1,
+    )
+
+
+def _phase_for_abort_decision(from_status: str) -> RunPhase:
+    if from_status in {
+        BeadStatus.draft.value,
+        BeadStatus.sized.value,
+        BeadStatus.ready.value,
+    }:
+        return RunPhase.plan
+    return RunPhase.verify
+
+
+def record_decision_action(
+    paths: Paths,
+    decision: DecisionLedgerEntry,
+    phase: RunPhase,
+    actor: Actor,
+    notes_md: Optional[str] = None,
+) -> ExecutionRecord:
+    if not decision.bead_id:
+        raise ValueError("DecisionLedgerEntry.bead_id required for decision action record")
+    record = build_execution_record(
+        decision.bead_id,
+        phase,
+        actor,
+        requested_transition=None,
+        applied_transition=None,
+        exit_code=0,
+        notes_md=notes_md,
+        links=[decision_ledger_link(decision)],
+    )
+    write_execution_record(paths, record)
+    return record
+
+
+def _decision_action_phase_for_bead(paths: Paths, bead_id: str) -> RunPhase:
+    bead = load_bead(paths, bead_id)
+    return _phase_for_abort_decision(bead.status.value)
 
 
 def collect_evidence_skeleton(bead: Bead, actor: Actor) -> EvidenceBundle:
@@ -937,6 +1103,21 @@ def record_transition_attempt(
     links: list[ArtifactLink] = list(extra_links) if extra_links else []
     if result.links:
         links.extend(result.links)
+    notes_md = result.notes or None
+    if result.auto_abort:
+        decision = create_abort_entry(
+            bead_id, "ABORT: boundary or anti-stall enforcement", actor
+        )
+        write_decision_entry(paths, decision)
+        if result.applied_transition:
+            from_status = result.applied_transition.split("->", 1)[0].strip()
+            decision_phase = _phase_for_abort_decision(from_status)
+        else:
+            decision_phase = RunPhase.verify
+        record_decision_action(paths, decision, decision_phase, actor)
+        links.append(decision_ledger_link(decision))
+        engine_note = "Engine-applied abort"
+        notes_md = f"{engine_note}; {notes_md}" if notes_md else engine_note
     if result.ok and result.applied_transition:
         transition = result.applied_transition.strip()
         if transition == "ready -> in_progress":
@@ -944,25 +1125,11 @@ def record_transition_attempt(
             if bead.execution_profile == ExecutionProfile.exception:
                 entry = find_active_exception_decision(paths, bead_id)
                 if entry is not None:
-                    links.append(
-                        ArtifactLink(
-                            artifact_type="decision_ledger_entry",
-                            artifact_id=entry.artifact_id,
-                            schema_name="sdlc.decision_ledger_entry",
-                            schema_version=1,
-                        )
-                    )
+                    links.append(decision_ledger_link(entry))
         elif transition == "approval_pending -> done":
             entry = find_approval_decision(paths, bead_id)
             if entry is not None:
-                links.append(
-                    ArtifactLink(
-                        artifact_type="decision_ledger_entry",
-                        artifact_id=entry.artifact_id,
-                        schema_name="sdlc.decision_ledger_entry",
-                        schema_version=1,
-                    )
-                )
+                links.append(decision_ledger_link(entry))
     record = build_execution_record(
         bead_id,
         phase_value,
@@ -970,7 +1137,7 @@ def record_transition_attempt(
         requested_transition=requested,
         applied_transition=result.applied_transition if result.ok else None,
         exit_code=0 if result.ok else 1,
-        notes_md=result.notes or None,
+        notes_md=notes_md,
         git=git_ref,
         links=links,
     )
@@ -1004,4 +1171,19 @@ def create_abort_entry(bead_id: str, reason: str, actor: Actor) -> DecisionLedge
         bead_id=bead_id,
         decision_type=DecisionType.scope_change,
         summary=summary,
+    )
+
+
+def policy_violation_record(
+    bead_id: str, actor: Actor, note: str, links: Optional[list[ArtifactLink]] = None
+) -> ExecutionRecord:
+    return build_execution_record(
+        bead_id,
+        RunPhase.implement,
+        actor,
+        requested_transition=None,
+        applied_transition=None,
+        exit_code=1,
+        notes_md=note,
+        links=links,
     )

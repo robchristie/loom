@@ -83,6 +83,18 @@ Any rejected transition attempt MUST generate an `ExecutionRecord` with:
 
 A DecisionLedgerEntry MAY additionally be emitted, but ExecutionRecord is canonical.
 
+**Decision Action Journaling Rule (Normative, v1)**
+When the engine creates a `DecisionLedgerEntry` as part of enforcing policy (including aborts),
+it MUST also emit an `ExecutionRecord` that represents the decision action itself.
+
+The decision-action `ExecutionRecord` MUST:
+
+ * have `requested_transition` unset
+ * have `applied_transition` unset
+ * have `exit_code == 0`
+ * link the DecisionLedgerEntry via `ExecutionRecord.links`
+ * use `phase == plan` for pre-execution decisions or `phase == verify` for verification/enforcement decisions
+
 **Acceptance Check Authority Rule (Normative, v1)**
 
 * `BeadReview.tightened_acceptance_checks` is the authoritative set of acceptance checks for verification gating.
@@ -381,10 +393,13 @@ A bead MUST be aborted (`aborted:needs-discovery`) if:
  * unknown unknowns are detected
 
 An “intervention” is any human action that alters the bead’s plan, acceptance, or execution constraints mid-run.
+For v1 enforcement, interventions are counted as DecisionLedgerEntry types:
+`assumption`, `tradeoff`, `exception`, or `scope_change` scoped to the bead.
 
 On abort, the system MUST:
 
  * create a DecisionLedgerEntry describing why
+ * use `decision_type == scope_change` for the abort decision
  * produce either:
 
    * a discovery bead, and/or
@@ -404,6 +419,8 @@ The lifecycle engine MUST enforce:
 
     * Bead must have a `BeadReview` with bucket != `XL`
     * If bucket == `L`, must have either split plan applied or explicit justification recorded.
+      For v1 enforcement, “justification” is a DecisionLedgerEntry of type `assumption`, `tradeoff`,
+      or `scope_change` with a non-empty summary for that bead.
 
 3. Implement gate
 

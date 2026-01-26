@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 import pytest
@@ -186,7 +186,8 @@ def test_boundary_enforcement_blocks_verification_and_links_registry(
 
     actor = Actor(kind="system", name="tester")
     result = request_transition(paths, bead_id, "verification_pending -> verified", actor)
-    assert not result.ok
+    assert result.ok
+    assert result.applied_transition == "verification_pending -> aborted:needs-discovery"
     assert "Boundary violation" in result.notes
 
     record_transition_attempt(
@@ -1798,6 +1799,372 @@ def test_abort_command_transitions_and_records_decision(
     assert entries[-1].summary.startswith("ABORT:")
 
     records = load_execution_records(paths)
+    assert len(records) == 2
+    decision_record, transition_record = records
+    assert decision_record.exit_code == 0
+    assert decision_record.requested_transition is None
+    assert decision_record.applied_transition is None
+    assert any(
+        link.artifact_id == entries[-1].artifact_id for link in decision_record.links
+    )
+    assert transition_record.applied_transition == "in_progress -> aborted:needs-discovery"
+    assert any(
+        link.artifact_id == entries[-1].artifact_id for link in transition_record.links
+    )
+
+
+def test_abort_command_records_decision_even_if_transition_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from sdlc.io import Paths, load_decision_ledger, load_execution_records, write_model
+
+    monkeypatch.chdir(tmp_path)
+    paths = Paths(Path.cwd())
+    _write_boundary_registry(paths)
+    bead_id = "work-abc123"
+    bead = Bead(
+        schema_name="sdlc.bead",
+        schema_version=1,
+        artifact_id=bead_id,
+        created_at=_now(),
+        created_by=Actor(kind="system", name="tester"),
+        bead_id=bead_id,
+        title="Test",
+        bead_type=BeadType.discovery,
+        status=BeadStatus.done,
+        requirements_md="req",
+        acceptance_criteria_md="acc",
+        context_md="ctx",
+        acceptance_checks=[],
+    )
+    write_model(paths.bead_path(bead_id), bead)
+
+    with pytest.raises(typer.Exit):
+        abort(bead_id, reason="needs discovery", actor_kind="human", actor_name="tester")
+
+    entries = list(load_decision_ledger(paths))
+    assert entries
+    assert entries[-1].decision_type == DecisionType.scope_change
+
+    records = load_execution_records(paths)
+    assert len(records) == 2
+    decision_record, transition_record = records
+    assert decision_record.exit_code == 0
+    assert decision_record.requested_transition is None
+    assert decision_record.applied_transition is None
+    assert transition_record.exit_code == 1
+    assert transition_record.applied_transition is None
+
+
+def test_plan_gate_bucket_l_requires_split_or_justification(tmp_path: Path) -> None:
+    from sdlc.io import Paths, load_decision_ledger, write_model
+    from sdlc.engine import append_decision_entry, request_transition
+
+    paths = Paths(tmp_path)
+    _write_boundary_registry(paths)
+    bead_id = "work-abc123"
+    bead = Bead(
+        schema_name="sdlc.bead",
+        schema_version=1,
+        artifact_id=bead_id,
+        created_at=_now(),
+        created_by=Actor(kind="system", name="tester"),
+        bead_id=bead_id,
+        title="Test",
+        bead_type=BeadType.implementation,
+        status=BeadStatus.sized,
+        requirements_md="req",
+        acceptance_criteria_md="acc",
+        context_md="ctx",
+        acceptance_checks=[],
+    )
+    review = BeadReview(
+        schema_name="sdlc.bead_review",
+        schema_version=1,
+        artifact_id="review-abc123",
+        created_at=_now(),
+        created_by=Actor(kind="human", name="reviewer"),
+        bead_id=bead_id,
+        effort_bucket=EffortBucket.L,
+        tightened_acceptance_checks=[],
+    )
+    write_model(paths.bead_path(bead_id), bead)
+    write_model(paths.bead_dir(bead_id) / "bead_review.json", review)
+
+    actor = Actor(kind="human", name="tester")
+    result = request_transition(paths, bead_id, "sized -> ready", actor)
+    assert not result.ok
+    assert "bucket L" in result.notes
+
+    decision = DecisionLedgerEntry(
+        schema_name="sdlc.decision_ledger_entry",
+        schema_version=1,
+        artifact_id="decision-abc123",
+        created_at=_now(),
+        created_by=Actor(kind="human", name="tester"),
+        bead_id=bead_id,
+        decision_type=DecisionType.tradeoff,
+        summary="Justify bucket L scope",
+    )
+    append_decision_entry(paths, decision)
+    assert list(load_decision_ledger(paths))
+
+    result = request_transition(paths, bead_id, "sized -> ready", actor)
+    assert result.ok
+
+
+def test_plan_gate_bucket_l_accepts_split_proposal(tmp_path: Path) -> None:
+    from sdlc.io import Paths, write_model
+    from sdlc.engine import request_transition
+
+    paths = Paths(tmp_path)
+    _write_boundary_registry(paths)
+    bead_id = "work-abc123"
+    bead = Bead(
+        schema_name="sdlc.bead",
+        schema_version=1,
+        artifact_id=bead_id,
+        created_at=_now(),
+        created_by=Actor(kind="system", name="tester"),
+        bead_id=bead_id,
+        title="Test",
+        bead_type=BeadType.implementation,
+        status=BeadStatus.sized,
+        requirements_md="req",
+        acceptance_criteria_md="acc",
+        context_md="ctx",
+        acceptance_checks=[],
+    )
+    review = BeadReview(
+        schema_name="sdlc.bead_review",
+        schema_version=1,
+        artifact_id="review-abc123",
+        created_at=_now(),
+        created_by=Actor(kind="human", name="reviewer"),
+        bead_id=bead_id,
+        effort_bucket=EffortBucket.L,
+        tightened_acceptance_checks=[],
+        split_required=True,
+        split_proposal={
+            "rationale": "Too large",
+            "proposed_beads": [
+                {
+                    "title": "Split A",
+                    "bead_type": "implementation",
+                    "requirements_md": "req",
+                    "acceptance_criteria_md": "acc",
+                    "context_md": "ctx",
+                    "depends_on": [],
+                }
+            ],
+        },
+    )
+    write_model(paths.bead_path(bead_id), bead)
+    write_model(paths.bead_dir(bead_id) / "bead_review.json", review)
+
+    actor = Actor(kind="human", name="tester")
+    result = request_transition(paths, bead_id, "sized -> ready", actor)
+    assert result.ok
+
+
+def test_boundary_violation_forces_abort_and_records_decision(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from sdlc.engine import record_transition_attempt, request_transition
+    from sdlc.io import Paths, load_decision_ledger, load_execution_records, write_model
+
+    paths = Paths(tmp_path)
+    _write_boundary_registry_with(
+        paths,
+        subsystems=[
+            {"name": "core", "paths": ["src/"]},
+            {"name": "docs", "paths": ["docs/"]},
+        ],
+        artifact_id="boundary-registry-enforce",
+    )
+    bead_id = "work-abc123"
+    bead = Bead(
+        schema_name="sdlc.bead",
+        schema_version=1,
+        artifact_id=bead_id,
+        created_at=_now(),
+        created_by=Actor(kind="system", name="tester"),
+        bead_id=bead_id,
+        title="Test",
+        bead_type=BeadType.implementation,
+        status=BeadStatus.verification_pending,
+        requirements_md="req",
+        acceptance_criteria_md="acc",
+        context_md="ctx",
+        acceptance_checks=[],
+    )
+    evidence = EvidenceBundle(
+        schema_name="sdlc.evidence_bundle",
+        schema_version=1,
+        artifact_id="evidence-abc123",
+        created_at=_now(),
+        created_by=Actor(kind="system", name="tester"),
+        bead_id=bead_id,
+        status=EvidenceStatus.validated,
+        for_bead_hash=canonical_hash_for_model(bead),
+        items=[],
+    )
+    write_model(paths.bead_path(bead_id), bead)
+    write_model(paths.evidence_path(bead_id), evidence)
+    monkeypatch.setenv("SDLC_MAX_FILES_TOUCHED", "1")
+    monkeypatch.setenv("SDLC_MAX_SUBSYSTEMS_TOUCHED", "1")
+    monkeypatch.setattr(
+        "sdlc.engine.detect_changed_files",
+        lambda _: ["src/sdlc/engine.py", "docs/guide.md"],
+    )
+
+    actor = Actor(kind="system", name="tester")
+    result = request_transition(paths, bead_id, "verification_pending -> verified", actor)
+    assert result.ok
+    assert result.applied_transition == "verification_pending -> aborted:needs-discovery"
+
+    record_transition_attempt(
+        paths, bead_id, RunPhase.verify, actor, "verification_pending -> verified", result
+    )
+    updated = Bead.model_validate_json(paths.bead_path(bead_id).read_text(encoding="utf-8"))
+    assert updated.status == BeadStatus.aborted_needs_discovery
+
+    entries = list(load_decision_ledger(paths))
+    assert entries
+    assert entries[-1].decision_type == DecisionType.scope_change
+    assert entries[-1].summary.startswith("ABORT:")
+
+    records = load_execution_records(paths)
+    assert len(records) == 2
+    decision_record, transition_record = records
+    assert decision_record.exit_code == 0
+    assert decision_record.requested_transition is None
+    assert decision_record.applied_transition is None
+    assert transition_record.exit_code == 0
+    assert "Boundary limit exceeded" in (transition_record.notes_md or "")
+    assert "Engine-applied abort" in (transition_record.notes_md or "")
+
+
+def test_engine_abort_decision_type_scope_change(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from sdlc.engine import record_transition_attempt, request_transition
+    from sdlc.io import Paths, load_decision_ledger, write_model
+
+    paths = Paths(tmp_path)
+    _write_boundary_registry_with(
+        paths,
+        subsystems=[
+            {"name": "core", "paths": ["src/"]},
+            {"name": "docs", "paths": ["docs/"]},
+        ],
+    )
+    bead_id = "work-abc123"
+    bead = Bead(
+        schema_name="sdlc.bead",
+        schema_version=1,
+        artifact_id=bead_id,
+        created_at=_now(),
+        created_by=Actor(kind="system", name="tester"),
+        bead_id=bead_id,
+        title="Test",
+        bead_type=BeadType.implementation,
+        status=BeadStatus.verification_pending,
+        requirements_md="req",
+        acceptance_criteria_md="acc",
+        context_md="ctx",
+        acceptance_checks=[],
+    )
+    evidence = EvidenceBundle(
+        schema_name="sdlc.evidence_bundle",
+        schema_version=1,
+        artifact_id="evidence-abc123",
+        created_at=_now(),
+        created_by=Actor(kind="system", name="tester"),
+        bead_id=bead_id,
+        status=EvidenceStatus.validated,
+        for_bead_hash=canonical_hash_for_model(bead),
+        items=[],
+    )
+    write_model(paths.bead_path(bead_id), bead)
+    write_model(paths.evidence_path(bead_id), evidence)
+    monkeypatch.setenv("SDLC_MAX_FILES_TOUCHED", "1")
+    monkeypatch.setenv("SDLC_MAX_SUBSYSTEMS_TOUCHED", "1")
+    monkeypatch.setattr(
+        "sdlc.engine.detect_changed_files",
+        lambda _: ["src/sdlc/engine.py", "docs/guide.md"],
+    )
+
+    actor = Actor(kind="system", name="tester")
+    result = request_transition(paths, bead_id, "verification_pending -> verified", actor)
+    record_transition_attempt(
+        paths, bead_id, RunPhase.verify, actor, "verification_pending -> verified", result
+    )
+
+    entries = list(load_decision_ledger(paths))
+    assert entries
+    assert entries[-1].decision_type == DecisionType.scope_change
+
+
+def test_anti_stall_blocks_verification_pending_to_verified(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from sdlc.engine import record_transition_attempt, request_transition
+    from sdlc.io import Paths, load_execution_records, write_model
+
+    paths = Paths(tmp_path)
+    _write_boundary_registry(paths)
+    bead_id = "work-abc123"
+    past = _now() - timedelta(minutes=120)
+    bead = Bead(
+        schema_name="sdlc.bead",
+        schema_version=1,
+        artifact_id=bead_id,
+        created_at=past,
+        created_by=Actor(kind="system", name="tester"),
+        bead_id=bead_id,
+        title="Test",
+        bead_type=BeadType.implementation,
+        status=BeadStatus.verification_pending,
+        requirements_md="req",
+        acceptance_criteria_md="acc",
+        context_md="ctx",
+        acceptance_checks=[],
+        max_elapsed_minutes=30,
+    )
+    evidence = EvidenceBundle(
+        schema_name="sdlc.evidence_bundle",
+        schema_version=1,
+        artifact_id="evidence-abc123",
+        created_at=_now(),
+        created_by=Actor(kind="system", name="tester"),
+        bead_id=bead_id,
+        status=EvidenceStatus.validated,
+        for_bead_hash=canonical_hash_for_model(bead),
+        items=[],
+    )
+    write_model(paths.bead_path(bead_id), bead)
+    write_model(paths.evidence_path(bead_id), evidence)
+
+    actor = Actor(kind="system", name="tester")
+    result = request_transition(paths, bead_id, "verification_pending -> verified", actor)
+    assert not result.ok
+    assert "Anti-stall" in result.notes
+
+    record_transition_attempt(
+        paths, bead_id, RunPhase.verify, actor, "verification_pending -> verified", result
+    )
+    records = load_execution_records(paths)
+    assert records[-1].exit_code == 1
+    assert "abort required" in (records[-1].notes_md or "")
+
+
+def test_policy_violation_record_helper(tmp_path: Path) -> None:
+    from sdlc.io import Paths, load_execution_records, write_execution_record
+    from sdlc.engine import policy_violation_record
+
+    paths = Paths(tmp_path)
+    actor = Actor(kind="system", name="tester")
+    record = policy_violation_record("work-abc123", actor, "policy_violation: out-of-grounding access")
+    write_execution_record(paths, record)
+    records = load_execution_records(paths)
     assert records
-    last = records[-1]
-    assert last.applied_transition == "in_progress -> aborted:needs-discovery"
+    assert "out-of-grounding access" in (records[-1].notes_md or "")
