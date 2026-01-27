@@ -3,6 +3,6 @@
 # *.log
 # tmp/
 .beads
-openspec/
+openspec/changes/archive
 .*
 repomix.config.json
