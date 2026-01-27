@@ -1,0 +1,89 @@
+@import '@picocss/pico/css/pico.min.css';
+
+:root {
+  --loom-muted: color-mix(in srgb, var(--pico-color) 65%, transparent);
+}
+
+code {
+  white-space: nowrap;
+}
+
+.badge {
+  display: inline-block;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  border: 1px solid var(--pico-muted-border-color);
+  font-size: 0.75rem;
+  line-height: 1.2;
+}
+
+.badge.good {
+  background: color-mix(in srgb, #1a7f37 12%, transparent);
+  border-color: color-mix(in srgb, #1a7f37 35%, var(--pico-muted-border-color));
+}
+
+.badge.warn {
+  background: color-mix(in srgb, #b26a00 12%, transparent);
+  border-color: color-mix(in srgb, #b26a00 35%, var(--pico-muted-border-color));
+}
+
+.badge.bad {
+  background: color-mix(in srgb, #b42318 12%, transparent);
+  border-color: color-mix(in srgb, #b42318 35%, var(--pico-muted-border-color));
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New",
+    monospace;
+}
+
+.small {
+  font-size: 0.85rem;
+  color: var(--pico-muted-color);
+}
+
+.row {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.spread {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+hr {
+  margin: 1.25rem 0;
+}
+
+.tabs {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin: 0.5rem 0 0.75rem;
+}
+
+.tabs button[aria-current="true"] {
+  font-weight: 700;
+  text-decoration: underline;
+}
+
+.timeline {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.timeline article {
+  margin: 0;
+}
+
+pre.json {
+  max-height: 520px;
+  overflow: auto;
+  font-size: 0.85rem;
+}
