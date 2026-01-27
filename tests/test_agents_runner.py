@@ -72,8 +72,9 @@ def test_implement_writes_log_and_journals(tmp_path: Path) -> None:
     actor = Actor(kind="agent", name="tester")
 
     prompt = paths.bead_dir(bead_id) / "codex_prompt.md"
-    prompt.parent.mkdir(parents=True, exist_ok=True)
-    prompt.write_text("hello", encoding="utf-8")
+    # Ensure we exercise the fallback prompt builder.
+    if prompt.exists():
+        prompt.unlink()
 
     def fake_codex(
         paths: Paths,
@@ -100,6 +101,11 @@ def test_implement_writes_log_and_journals(tmp_path: Path) -> None:
     code = run_implement(paths, bead_id, actor, subprocess_runner=fake_codex)
     assert code == 0
     assert (paths.bead_dir(bead_id) / "codex.log").exists()
+
+    # Fallback prompt includes grounding policy + uv run guidance.
+    prompt_text = (paths.bead_dir(bead_id) / "codex_prompt.md").read_text(encoding="utf-8")
+    assert "allowed commands" in prompt_text.lower() or "no grounding policy" in prompt_text.lower()
+    assert "uv run" in prompt_text.lower()
 
     last = json.loads(paths.journal_path.read_text(encoding="utf-8").splitlines()[-1])
     assert last["phase"] == "implement"

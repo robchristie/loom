@@ -66,7 +66,7 @@
   - Append `ExecutionRecord` with `phase=verify` and `produced_artifacts=[agent_verify.json]`
 
 ## 5. Implementation runner (codex-cli)
-- [~] 5.1 Implement a prompt builder:
+- [x] 5.1 Implement a prompt builder:
   - Always include: Bead requirements/context/acceptance criteria + acceptance checks
   - Include OpenSpecRef summary (change id + state)
   - Include GroundingBundle items (titles + snippets + file refs)
@@ -76,9 +76,9 @@
     - excluded paths
     - instruction to use `uv run` for tests
   Notes:
-  - Current implementation uses `runs/<bead_id>/codex_prompt.md` from the planner when present.
-  - If missing, it falls back to a minimal prompt that includes bead markdown + hard constraints.
-  - It does not yet fully embed the allowed/disallowed/excluded command lists into the fallback prompt.
+  - If `runs/<bead_id>/codex_prompt.md` exists, it is used as-is (planner-produced).
+  - If missing, the runner builds a deterministic fallback prompt that includes bead markdown, OpenSpec summary,
+    grounding context, grounding policy constraints (allowed/disallowed/excluded), and hard constraints including `uv run`.
 
 - [x] 5.2 Implement `codex_runner.py`:
   - Run codex-cli via subprocess (configurable bin/args)

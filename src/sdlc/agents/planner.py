@@ -36,6 +36,10 @@ async def run_planner(model: object, *, deps: PlannerDeps) -> AgentPlan:
     agent = build_planner_agent(model)
     prompt = (
         "Plan the work for this bead and create a codex prompt.\n\n"
+        "Your codex prompt MUST include:\n"
+        "- the bead requirements + acceptance checks\n"
+        "- grounding policy constraints (allowed/disallowed commands, excluded paths)\n"
+        "- instruction to use `uv run` for tests/linters/typecheck\n\n"
         "# Bead\n"
         f"{deps.bead_markdown}\n\n"
         "# OpenSpec\n"

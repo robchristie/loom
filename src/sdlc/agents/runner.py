@@ -69,6 +69,51 @@ def _grounding_markdown(paths: Paths, bead_id: str) -> str:
     return "\n".join(lines)
 
 
+def _grounding_policy_markdown(paths: Paths, bead_id: str) -> str:
+    """Render command/path constraints from GroundingBundle for prompts."""
+
+    bundle = load_grounding(paths, bead_id)
+    if bundle is None:
+        return "(no grounding policy present)"
+
+    lines: List[str] = []
+    if bundle.allowed_commands:
+        lines.append("Allowed commands (prefer these):")
+        lines.extend([f"- `{c}`" for c in bundle.allowed_commands])
+        lines.append("")
+    if bundle.disallowed_commands:
+        lines.append("Disallowed commands (do not run):")
+        lines.extend([f"- `{c}`" for c in bundle.disallowed_commands])
+        lines.append("")
+    if bundle.excluded_paths:
+        lines.append("Excluded paths (do not modify):")
+        lines.extend([f"- `{p}`" for p in bundle.excluded_paths])
+        lines.append("")
+    return "\n".join(lines).strip() or "(no grounding policy constraints set)"
+
+
+def build_codex_prompt_md(paths: Paths, bead_id: str) -> str:
+    """Build a codex-cli prompt when planner output isn't present.
+
+    This is intentionally deterministic and explicit about constraints.
+    """
+
+    return (
+        "# Loom Implementation Prompt\n\n"
+        + _bead_markdown(bead_id, paths)
+        + "\n\n## OpenSpec\n"
+        + _openspec_markdown(paths, bead_id)
+        + "\n\n## Grounding context\n"
+        + _grounding_markdown(paths, bead_id)
+        + "\n\n## Grounding policy\n"
+        + _grounding_policy_markdown(paths, bead_id)
+        + "\n\n## Hard constraints\n"
+        + "- Use `uv run` for tests/linters/typecheck\n"
+        + "- Do NOT log API keys or secrets\n"
+        + "- Prefer modifying files referenced in grounding\n"
+    )
+
+
 def _recent_runs_markdown(paths: Paths, bead_id: str, *, limit: int = 10) -> str:
     records = [r for r in load_execution_records(paths) if r.bead_id == bead_id]
     records = records[-limit:]
@@ -196,14 +241,7 @@ def run_implement(
     prompt_path = paths.bead_dir(bead_id) / "codex_prompt.md"
     if not prompt_path.exists():
         # Fallback prompt if no planner output exists.
-        prompt_path.write_text(
-            (
-                "# Loom Implementation Prompt\n\n"
-                + _bead_markdown(bead_id, paths)
-                + "\n\nHard constraints:\n- Use `uv run` for tests\n- Do not log API keys\n"
-            ),
-            encoding="utf-8",
-        )
+        prompt_path.write_text(build_codex_prompt_md(paths, bead_id) + "\n", encoding="utf-8")
 
     grounded = _grounded_files(paths, bead_id)
 
