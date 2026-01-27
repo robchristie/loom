@@ -11,6 +11,7 @@ from pydantic import ValidationError
 from sdlc.codec import sha256_canonical_json
 from sdlc.engine import acceptance_coverage_errors, build_execution_record, canonical_hash_for_model
 from sdlc.cli import app
+from sdlc.io import Paths
 from sdlc.models import (
     Actor,
     AcceptanceCheck,

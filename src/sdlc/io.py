@@ -17,7 +17,6 @@ from .models import (
     EvidenceBundle,
     ExecutionRecord,
     GroundingBundle,
-    OpenSpecRef,
 )
 
 

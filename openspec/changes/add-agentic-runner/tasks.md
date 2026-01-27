@@ -47,6 +47,23 @@
 - [ ] 4.4 Journal planner run:
   - Append `ExecutionRecord` with `phase=plan`, `commands=[]`, `produced_artifacts=[agent_plan.json, codex_prompt.md]`, and a brief `notes_md`.
 
+## 4b. Verifier agent (OpenRouter)
+- [ ] 4b.1 Implement `AgentVerify` output model (in `schemas.py`), e.g.:
+  - `summary_md`
+  - `risks` (list of short strings)
+  - `recommended_acceptance_checks` (list of command strings; advisory only, MUST NOT mutate bead)
+  - `verdict` (enum like `pass|needs_changes`)
+
+- [ ] 4b.2 Implement `verifier.py`:
+  - Inputs: Bead + EvidenceBundle + recent ExecutionRecords
+  - Output: `AgentVerify` (typed)
+
+- [ ] 4b.3 Persist outputs:
+  - Write `runs/<bead_id>/agent_verify.json`
+
+- [ ] 4b.4 Journal verifier run:
+  - Append `ExecutionRecord` with `phase=verify` and `produced_artifacts=[agent_verify.json]`
+
 ## 5. Implementation runner (codex-cli)
 - [ ] 5.1 Implement a prompt builder:
   - Always include: Bead requirements/context/acceptance criteria + acceptance checks

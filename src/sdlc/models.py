@@ -5,6 +5,7 @@ from enum import Enum
 from typing import List, Optional, Literal
 
 from pydantic import BaseModel, Field, StringConstraints, ConfigDict
+from typing import Any, cast
 from typing_extensions import Annotated
 
 ISO8601 = datetime
@@ -342,7 +343,9 @@ SCHEMA_MODELS = [
 def schema_registry() -> dict[str, type[SchemaBase]]:
     registry: dict[str, type[SchemaBase]] = {}
     for cls in SCHEMA_MODELS:
-        default = cls.model_fields["schema_name"].default
+        # pydantic's BaseModel metaclass typing doesn't expose model_fields cleanly.
+        model_fields = getattr(cls, "model_fields")
+        default = cast(Any, model_fields)["schema_name"].default
         if isinstance(default, str):
-            registry[default] = cls
+            registry[default] = cast(type[SchemaBase], cls)
     return registry

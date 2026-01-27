@@ -61,3 +61,29 @@ uv run sdlc request <bead_id> "verification_pending -> verified"
 uv run sdlc approve <bead_id> --summary "APPROVAL: shipped"
 uv run sdlc request <bead_id> "approval_pending -> done"
 ```
+
+## Agent workflow
+
+These commands run the planner, implementation (codex-cli), and verification runner.
+
+```bash
+# 0) Ensure grounding + OpenSpecRef are present (recommended)
+uv run sdlc grounding generate <bead_id>
+uv run sdlc openspec sync <bead_id>
+
+# 1) Plan
+uv run sdlc agent plan <bead_id>
+
+# 2) Implement (codex-cli)
+uv run sdlc agent implement <bead_id>
+
+# 3) Verify (runs acceptance checks + writes evidence)
+uv run sdlc agent verify <bead_id>
+```
+
+Artifacts written:
+- `runs/<bead_id>/agent_plan.json`
+- `runs/<bead_id>/codex_prompt.md`
+- `runs/<bead_id>/codex.log`
+- `runs/<bead_id>/evidence.json`
+- `runs/<bead_id>/evidence/*.log`

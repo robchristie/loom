@@ -110,7 +110,7 @@ def request(
     actor_name: str = typer.Option(os.getenv("USER", "unknown"), "--actor-name"),
 ) -> None:
     paths = Paths(Path.cwd())
-    actor = Actor(kind=actor_kind, name=actor_name)
+    actor = Actor(kind=actor_kind, name=actor_name)  # type: ignore[arg-type]
     result = request_transition(paths, bead_id, transition, actor)
     phase = _phase_for_transition(transition)
     record_transition_attempt(paths, bead_id, phase, actor, transition, result)
@@ -129,6 +129,10 @@ grounding_app = typer.Typer(add_completion=False)
 app.add_typer(grounding_app, name="grounding")
 openspec_app = typer.Typer(add_completion=False)
 app.add_typer(openspec_app, name="openspec")
+
+
+agent_app = typer.Typer(add_completion=False)
+app.add_typer(agent_app, name="agent")
 
 
 @evidence_app.command("collect")
@@ -205,7 +209,7 @@ def abort(
     actor_name: str = typer.Option(os.getenv("USER", "unknown"), "--actor-name"),
 ) -> None:
     paths = Paths(Path.cwd())
-    actor = Actor(kind=actor_kind, name=actor_name)
+    actor = Actor(kind=actor_kind, name=actor_name)  # type: ignore[arg-type]
     entry = create_abort_entry(bead_id, reason, actor)
     append_decision_entry(paths, entry)
     record_decision_action(
@@ -251,3 +255,55 @@ def openspec_sync(bead_id: str) -> None:
     out_path = paths.bead_dir(bead_id) / "openspec_ref.json"
     write_model(out_path, ref)
     typer.echo(str(out_path))
+
+
+@agent_app.command("plan")
+def agent_plan(
+    bead_id: str,
+    actor_name: str = typer.Option(os.getenv("USER", "unknown"), "--actor-name"),
+) -> None:
+    """Run planner agent and write runs/<bead_id>/agent_plan.json + codex_prompt.md."""
+
+    from .agents import run_plan
+
+    paths = Paths(Path.cwd())
+    actor = Actor(kind="agent", name=actor_name)
+    run_plan(paths, bead_id, actor)
+
+
+@agent_app.command("implement")
+def agent_implement(
+    bead_id: str,
+    actor_name: str = typer.Option(os.getenv("USER", "unknown"), "--actor-name"),
+    auto_transition: bool = typer.Option(
+        False, "--auto-transition/--no-auto-transition", help="Request engine transitions as system actor"
+    ),
+) -> None:
+    """Run implementation via codex-cli and journal the run."""
+
+    from .agents import run_implement
+
+    paths = Paths(Path.cwd())
+    actor = Actor(kind="agent", name=actor_name)
+    code = run_implement(paths, bead_id, actor, auto_transition=auto_transition)
+    if code != 0:
+        raise typer.Exit(code=code)
+
+
+@agent_app.command("verify")
+def agent_verify(
+    bead_id: str,
+    actor_name: str = typer.Option(os.getenv("USER", "unknown"), "--actor-name"),
+    auto_transition: bool = typer.Option(
+        False, "--auto-transition/--no-auto-transition", help="Request engine transitions as system actor"
+    ),
+) -> None:
+    """Run acceptance checks -> evidence bundle -> engine validation, then journal."""
+
+    from .agents import run_verify
+
+    paths = Paths(Path.cwd())
+    actor = Actor(kind="agent", name=actor_name)
+    code = run_verify(paths, bead_id, actor, auto_transition=auto_transition)
+    if code != 0:
+        raise typer.Exit(code=code)

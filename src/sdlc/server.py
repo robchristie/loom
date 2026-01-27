@@ -61,7 +61,6 @@ from .models import (
     Bead,
     BeadReview,
     BeadStatus,
-    DecisionLedgerEntry,
     EvidenceBundle,
     FileRef,
     GitRef,
@@ -115,7 +114,7 @@ class TransitionResponse(BaseModel):
     requested_transition: str
     applied_transition: Optional[str] = None
     auto_abort: bool = False
-    execution_record: Optional[dict] = None  # JSON-serializable ExecutionRecord dump
+    execution_record: Optional[dict[str, Any]] = None  # JSON-serializable ExecutionRecord dump
 
 
 class ApproveRequest(BaseModel):
@@ -139,7 +138,7 @@ class ActionResponse(BaseModel):
 # ----------------------------
 
 def _default_actor(kind: str = "human") -> Actor:
-    return Actor(kind=kind, name=os.getenv("USER", "unknown"))
+    return Actor(kind=kind, name=os.getenv("USER", "unknown"))  # type: ignore[arg-type]
 
 
 def get_paths() -> Paths:
@@ -182,7 +181,8 @@ def _safe_read_json(path: Path) -> Optional[dict[str, Any]]:
     if not path.exists():
         return None
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        return payload if isinstance(payload, dict) else None
     except Exception:
         return None
 
@@ -436,12 +436,76 @@ def bead_artifacts(bead_id: str, paths: Paths = Depends(get_paths)) -> BeadArtif
         ("evidence", paths.evidence_path(bead_id)),
         ("openspec_ref", bead_dir / "openspec_ref.json"),
         ("ready_acceptance_snapshot", bead_dir / "ready_acceptance_hash.json"),
+        ("agent_plan", bead_dir / "agent_plan.json"),
+        ("codex_prompt", bead_dir / "codex_prompt.md"),
+        ("codex_log", bead_dir / "codex.log"),
+        ("agent_verify", bead_dir / "agent_verify.json"),
     ]
     artifacts = [
         ArtifactStatus(name=name, path=str(p.relative_to(paths.repo_root)), exists=p.exists())
         for (name, p) in candidates
     ]
     return BeadArtifactsIndex(bead_id=bead_id, artifacts=artifacts)
+
+
+@app.post("/api/beads/{bead_id}/agent/plan", response_model=ActionResponse)
+def agent_plan(
+    bead_id: str,
+    actor: Optional[Actor] = Body(None),
+    paths: Paths = Depends(get_paths),
+) -> ActionResponse:
+    from .agents import run_plan
+
+    actor = actor or Actor(kind="agent", name="sdlc-web")
+    run_plan(paths, bead_id, actor)
+    return ActionResponse(
+        ok=True,
+        notes="Planner run completed",
+        produced_artifacts=[
+            f"runs/{bead_id}/agent_plan.json",
+            f"runs/{bead_id}/codex_prompt.md",
+        ],
+    )
+
+
+@app.post("/api/beads/{bead_id}/agent/implement", response_model=ActionResponse)
+def agent_implement(
+    bead_id: str,
+    auto_transition: bool = Body(False),
+    actor: Optional[Actor] = Body(None),
+    paths: Paths = Depends(get_paths),
+) -> ActionResponse:
+    from .agents import run_implement
+
+    actor = actor or Actor(kind="agent", name="sdlc-web")
+    code = run_implement(paths, bead_id, actor, auto_transition=auto_transition)
+    if code != 0:
+        raise HTTPException(status_code=500, detail=f"codex exited {code}")
+    return ActionResponse(
+        ok=True,
+        notes="Implementation run completed",
+        produced_artifacts=[f"runs/{bead_id}/codex.log"],
+    )
+
+
+@app.post("/api/beads/{bead_id}/agent/verify", response_model=ActionResponse)
+def agent_verify(
+    bead_id: str,
+    auto_transition: bool = Body(False),
+    actor: Optional[Actor] = Body(None),
+    paths: Paths = Depends(get_paths),
+) -> ActionResponse:
+    from .agents import run_verify
+
+    actor = actor or Actor(kind="agent", name="sdlc-web")
+    code = run_verify(paths, bead_id, actor, auto_transition=auto_transition)
+    if code != 0:
+        raise HTTPException(status_code=400, detail="evidence validation failed")
+    return ActionResponse(
+        ok=True,
+        notes="Verify run completed",
+        produced_artifacts=[f"runs/{bead_id}/evidence.json"],
+    )
 
 
 @app.get("/api/beads/{bead_id}/review", response_model=Optional[BeadReview])
@@ -459,23 +523,23 @@ def get_evidence(bead_id: str, paths: Paths = Depends(get_paths)) -> Optional[Ev
     return load_evidence(paths, bead_id)
 
 
-@app.get("/api/beads/{bead_id}/journal", response_model=List[dict])
+@app.get("/api/beads/{bead_id}/journal", response_model=List[dict[str, Any]])
 def bead_journal(
     bead_id: str,
     limit: int = Query(500, ge=1, le=5000),
     paths: Paths = Depends(get_paths),
-) -> List[dict]:
+) -> List[dict[str, Any]]:
     records = [r for r in load_execution_records(paths) if r.bead_id == bead_id]
     records = records[-limit:]
     return [r.model_dump(mode="json") for r in records]
 
 
-@app.get("/api/beads/{bead_id}/decisions", response_model=List[dict])
+@app.get("/api/beads/{bead_id}/decisions", response_model=List[dict[str, Any]])
 def bead_decisions(
     bead_id: str,
     limit: int = Query(500, ge=1, le=5000),
     paths: Paths = Depends(get_paths),
-) -> List[dict]:
+) -> List[dict[str, Any]]:
     entries = [e for e in load_decision_ledger(paths) if e.bead_id == bead_id]
     entries = entries[-limit:]
     return [e.model_dump(mode="json") for e in entries]

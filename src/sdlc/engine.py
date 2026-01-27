@@ -5,7 +5,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
-from typing import Iterable, Optional
+from typing import Callable, Iterable, Optional
 
 from .codec import sha256_canonical_json
 from .io import (
@@ -197,7 +197,7 @@ def evaluate_boundary(
     paths: Paths,
     bead: Bead,
     changed_files: Optional[list[str]] = None,
-    changed_files_provider: Optional[callable] = None,
+    changed_files_provider: Optional[Callable[[Paths], list[str]]] = None,
 ) -> BoundaryEvaluation:
     registry, registry_path = load_boundary_registry(paths, bead)
     registry_hash = canonical_hash_for_boundary_registry(registry)
@@ -316,7 +316,10 @@ def _load_ready_acceptance_snapshot(paths: Paths, bead_id: str) -> Optional[dict
     snapshot_path = _ready_acceptance_snapshot_path(paths, bead_id)
     if not snapshot_path.exists():
         return None
-    return json.loads(snapshot_path.read_text(encoding="utf-8"))
+    payload = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    if isinstance(payload, dict):
+        return {str(k): str(v) for k, v in payload.items()}
+    return None
 
 
 def ensure_bead_artifact_id(bead: Bead) -> Optional[str]:
@@ -600,6 +603,7 @@ def request_transition(paths: Paths, bead_id: str, transition: str, actor: Actor
         if plan_error:
             errors.append(plan_error)
         if not errors:
+            assert review is not None
             apply_acceptance_checks_from_review(bead, review)
             _write_ready_acceptance_snapshot(paths, bead)
     elif bead.status == BeadStatus.ready and to_status == BeadStatus.in_progress.value:
@@ -745,6 +749,7 @@ def build_execution_record(
     git: Optional[GitRef] = None,
     produced_artifacts: Optional[list[FileRef]] = None,
     links: Optional[list[ArtifactLink]] = None,
+    commands: Optional[list[str]] = None,
 ) -> ExecutionRecord:
     return ExecutionRecord(
         artifact_id=f"exec-{bead_id}-{int(now_utc().timestamp())}",
@@ -757,6 +762,7 @@ def build_execution_record(
         requested_transition=requested_transition,
         applied_transition=applied_transition,
         git=git,
+        commands=commands or [],
         produced_artifacts=produced_artifacts or [],
         links=links or [],
         schema_name="sdlc.execution_record",
@@ -859,10 +865,11 @@ def evidence_validation_errors(
     for check in bead.acceptance_checks:
         if getattr(check, "kind", "command") != "command":
             continue
-        item = _find_item_for_check(evidence, check)
-        if item is None:
+        item_opt = _find_item_for_check(evidence, check)
+        if item_opt is None:
             errors.append(f"Missing evidence for command check '{check.name}'")
             continue
+        item = item_opt
         if item.exit_code is None:
             errors.append(f"Evidence item {item.name} missing exit_code")
             continue

@@ -325,6 +325,22 @@
 
     <hr />
 
+    <div class="row">
+      <button type="button" class="secondary" on:click={() => doAction(`/api/beads/${data.bead_id}/agent/plan`, actor)} disabled={busy}>
+        Run plan agent
+      </button>
+
+      <button type="button" class="secondary" on:click={() => doAction(`/api/beads/${data.bead_id}/agent/implement`, actor)} disabled={busy}>
+        Run implement (codex)
+      </button>
+
+      <button type="button" class="secondary" on:click={() => doAction(`/api/beads/${data.bead_id}/agent/verify`, actor)} disabled={busy}>
+        Run verify
+      </button>
+    </div>
+
+    <hr />
+
     <div class="grid">
       <label>
         Approval summary

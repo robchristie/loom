@@ -30,6 +30,7 @@ while preserving Loom’s enforcement guarantees (gates, authority rules, and ap
   - `runs/<bead_id>/codex_prompt.md` (prompt for codex-cli)
   - `runs/<bead_id>/codex.log` (stdout/stderr capture)
   - `runs/<bead_id>/evidence/<check_name>.log` (per-check logs; optional)
+  - `runs/<bead_id>/agent_verify.json` (optional structured verifier output)
 
 - Ensure every agent action is journaled:
   - Append an `ExecutionRecord` for each agent run (phase, commands executed, git refs, produced artifacts, notes).
