@@ -10,11 +10,11 @@ All runs append ExecutionRecord entries to runs/journal.jsonl.
 
 from __future__ import annotations
 
-from .runner import run_implement, run_plan, run_verify
+from .runner import run_implement, run_openspec_propose, run_plan, run_verify
 
 __all__ = [
     "run_plan",
     "run_implement",
     "run_verify",
+    "run_openspec_propose",
 ]
-

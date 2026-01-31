@@ -13,8 +13,9 @@ from .config import AgentSettings
 from .evidence_runner import EvidenceRunResult, run_acceptance_checks_to_evidence
 from .openrouter import openrouter_model
 from .planner import PlannerDeps, run_planner
-from .schemas import AgentPlan
+from .schemas import AgentPlan, OpenSpecDraft, OpenSpecInterview
 from .verifier import VerifierDeps, run_verifier
+from .openspec_proposer import OpenSpecProposerDeps, run_openspec_draft, run_openspec_interview, run_openspec_synth
 
 
 def _bead_markdown(bead_id: str, paths: Paths) -> str:
@@ -173,6 +174,226 @@ def _write_agent_model(paths: Paths, path: Path, model: object) -> None:
     else:
         _write_json(path, model)
 
+
+def _read_text_if_exists(path: Path) -> str:
+    if not path.exists():
+        return ""
+    return path.read_text(encoding="utf-8")
+
+
+def _default_openspec_instructions_md(paths: Paths) -> str:
+    # These are part of the repo and should be safe to include as grounding for formatting.
+    p = paths.repo_root / "openspec" / "AGENTS.md"
+    return _read_text_if_exists(p)
+
+
+def _default_openspec_project_md(paths: Paths) -> str:
+    p = paths.repo_root / "openspec" / "project.md"
+    return _read_text_if_exists(p)
+
+
+def _derive_openspec_ref_id(change_id: str) -> str:
+    return f"openspec-ref-{change_id}"
+
+
+def _write_text(path: Path, content: str) -> None:
+    from ..io import ensure_parent
+
+    ensure_parent(path)
+    if not content.endswith("\n"):
+        content += "\n"
+    path.write_text(content, encoding="utf-8")
+
+
+def run_openspec_propose(
+    paths: Paths,
+    bead_id: str,
+    change_id: str,
+    *,
+    actor: Actor,
+    interactive: bool,
+    council: bool,
+    settings: AgentSettings | None = None,
+    model_override: object | None = None,
+    overwrite: bool = False,
+    openspec_ref_id: str | None = None,
+    answers: list[str] | None = None,
+) -> OpenSpecDraft:
+    """Draft OpenSpec proposal artifacts for a bead.
+
+    This is an authoring workflow only; it must NOT approve refs or write restricted decision types.
+    """
+
+    settings = settings or AgentSettings()
+    bead = load_bead(paths, bead_id)
+
+    change_dir = paths.repo_root / "openspec" / "changes" / change_id
+    if change_dir.exists() and not overwrite:
+        raise FileExistsError(f"OpenSpec change dir exists (use --overwrite): {change_dir}")
+
+    # Models
+    model = model_override
+    if model is None:
+        model = openrouter_model(settings.openspec_primary_model(), settings=settings)
+
+    # Context
+    bead_md = _bead_markdown(bead_id, paths)
+    grounding_md = _grounding_markdown(paths, bead_id)
+    openspec_instr = _default_openspec_instructions_md(paths)
+    openspec_proj = _default_openspec_project_md(paths)
+
+    transcript_lines: list[str] = []
+    transcript_lines.append(f"# OpenSpec Proposal Interview Transcript\n\nBead: `{bead_id}`\nChange: `{change_id}`\n")
+
+    deps = OpenSpecProposerDeps(
+        bead_markdown=bead_md,
+        grounding_markdown=grounding_md,
+        openspec_instructions_md=openspec_instr,
+        openspec_project_md=openspec_proj,
+        change_id=change_id,
+        interview_transcript_md="",
+        non_interactive=not interactive,
+    )
+
+    # Interview loop (optional). In server mode, interactive will be False and answers may be provided.
+    interview_rounds = 0
+    max_rounds = max(0, int(settings.openspec_interview_rounds_max))
+    provided_answers = list(answers or [])
+
+    while interactive and interview_rounds < max_rounds:
+        deps = OpenSpecProposerDeps(
+            bead_markdown=deps.bead_markdown,
+            grounding_markdown=deps.grounding_markdown,
+            openspec_instructions_md=deps.openspec_instructions_md,
+            openspec_project_md=deps.openspec_project_md,
+            change_id=deps.change_id,
+            interview_transcript_md="\n".join(transcript_lines),
+            non_interactive=deps.non_interactive,
+        )
+        interview: OpenSpecInterview = run_openspec_interview(model, deps)
+        if not interview.questions:
+            break
+        transcript_lines.append(f"\n## Interview round {interview_rounds + 1}\n")
+        for q in interview.questions:
+            transcript_lines.append(f"### Q: {q}\n")
+            a = input("> ").strip()
+            transcript_lines.append(f"**A:** {a}\n")
+        interview_rounds += 1
+
+    # Non-interactive: include provided Q/A as transcript.
+    if not interactive and provided_answers:
+        transcript_lines.append("\n## Provided answers\n")
+        for idx, a in enumerate(provided_answers, start=1):
+            transcript_lines.append(f"- Answer {idx}: {a}\n")
+
+    deps = OpenSpecProposerDeps(
+        bead_markdown=deps.bead_markdown,
+        grounding_markdown=deps.grounding_markdown,
+        openspec_instructions_md=deps.openspec_instructions_md,
+        openspec_project_md=deps.openspec_project_md,
+        change_id=deps.change_id,
+        interview_transcript_md="\n".join(transcript_lines),
+        non_interactive=deps.non_interactive,
+    )
+
+    # Drafting (single model) or council mode (multiple independent drafts + synth)
+    draft: OpenSpecDraft
+    models_used: list[str] = []
+    if council and settings.openspec_council_models:
+        drafts: list[OpenSpecDraft] = []
+        for name in settings.openspec_council_models:
+            council_model = model_override or openrouter_model(name, settings=settings)
+            models_used.append(name)
+            drafts.append(run_openspec_draft(council_model, deps))
+        synth_model_name = settings.openspec_synth_model_name()
+        synth_model = model_override or openrouter_model(synth_model_name, settings=settings)
+        models_used.append(synth_model_name)
+        draft = run_openspec_synth(synth_model, deps, drafts)
+    else:
+        # If council requested but no council models configured, fall back to single-model.
+        models_used.append(settings.openspec_primary_model())
+        draft = run_openspec_draft(model, deps)
+
+    # Write change files
+    if not overwrite and change_dir.exists():
+        raise FileExistsError(f"OpenSpec change dir exists (use --overwrite): {change_dir}")
+    (change_dir / "specs").mkdir(parents=True, exist_ok=True)
+    _write_text(change_dir / "proposal.md", draft.proposal_md)
+    _write_text(change_dir / "tasks.md", draft.tasks_md)
+    if draft.design_md:
+        _write_text(change_dir / "design.md", draft.design_md)
+    for df in draft.delta_files:
+        out = paths.repo_root / df.path
+        # Safety: enforce deltas are written under this change-id.
+        expected_prefix = f"openspec/changes/{change_id}/specs/"
+        if not df.path.startswith(expected_prefix):
+            raise ValueError(f"Delta file path must start with {expected_prefix}: {df.path}")
+        _write_text(out, df.content)
+
+    # Ensure refs dir exists (repo may not have it yet).
+    refs_dir = paths.repo_root / "openspec" / "refs"
+    refs_dir.mkdir(parents=True, exist_ok=True)
+
+    from ..models import OpenSpecRef, OpenSpecState
+    from ..io import now_utc, write_model
+
+    ref_id = openspec_ref_id or _derive_openspec_ref_id(change_id)
+    ref_path = refs_dir / f"{ref_id}.json"
+    ref = OpenSpecRef(
+        artifact_id=ref_id,
+        created_at=now_utc(),
+        created_by=Actor(kind="agent", name="sdlc"),
+        change_id=change_id,
+        state=OpenSpecState.proposal,
+        path=f"openspec/changes/{change_id}",
+        approved_at=None,
+        approved_by=None,
+        content_hash=None,
+        links=[],
+        schema_name="sdlc.openspec_ref",
+        schema_version=1,
+    )
+    write_model(ref_path, ref)
+
+    # Runs artifacts
+    agent_json_path = paths.bead_dir(bead_id) / "agent_openspec.json"
+    agent_md_path = paths.bead_dir(bead_id) / "agent_openspec.md"
+    _write_agent_model(paths, agent_json_path, draft)
+    _write_text(agent_md_path, "\n".join(transcript_lines) + "\n\n## Summary\n\n- Generated OpenSpec change artifacts.\n")
+
+    # Journal
+    from ..io import git_head, git_is_dirty, write_execution_record
+    produced: list[FileRef] = [
+        FileRef(path=f"runs/{bead_id}/agent_openspec.json"),
+        FileRef(path=f"runs/{bead_id}/agent_openspec.md"),
+        FileRef(path=f"openspec/refs/{ref_id}.json"),
+        FileRef(path=f"openspec/changes/{change_id}/proposal.md"),
+        FileRef(path=f"openspec/changes/{change_id}/tasks.md"),
+    ]
+    if draft.design_md:
+        produced.append(FileRef(path=f"openspec/changes/{change_id}/design.md"))
+    for df in draft.delta_files:
+        produced.append(FileRef(path=df.path))
+
+    record = build_execution_record(
+        bead_id,
+        RunPhase.plan,
+        actor=actor,
+        requested_transition=None,
+        applied_transition=None,
+        exit_code=0,
+        commands=[],
+        produced_artifacts=sorted({p.path: p for p in produced}.values(), key=lambda r: r.path),
+        notes_md="OpenSpec proposal drafted"
+        + (f"; council={council}" if council else "")
+        + (f"; models={','.join(models_used)}" if models_used else ""),
+        git=GitRef(head_before=git_head(paths), dirty_before=git_is_dirty(paths)),
+    )
+    write_execution_record(paths, record)
+
+    # Link to bead.openspec_ref is intentionally not done here; that's a separate sync/approval flow.
+    _ = bead  # explicitly unused, but ensures bead was loaded for context
+    return draft
 
 def run_plan(
     paths: Paths,

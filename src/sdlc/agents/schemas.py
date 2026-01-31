@@ -33,3 +33,19 @@ class AgentVerify(_AgentBase):
     recommended_acceptance_checks: List[str] = Field(default_factory=list)
     verdict: VerifyVerdict = VerifyVerdict.passed
 
+
+class OpenSpecInterview(_AgentBase):
+    questions: List[str] = Field(default_factory=list)
+
+
+class OpenSpecDraftFile(_AgentBase):
+    path: str
+    content: str
+
+
+class OpenSpecDraft(_AgentBase):
+    change_id: str
+    proposal_md: str
+    tasks_md: str
+    design_md: str | None = None
+    delta_files: List[OpenSpecDraftFile] = Field(default_factory=list)

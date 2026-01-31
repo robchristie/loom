@@ -257,6 +257,39 @@ def openspec_sync(bead_id: str) -> None:
     typer.echo(str(out_path))
 
 
+@openspec_app.command("approve-ref")
+def openspec_approve_ref(
+    openspec_ref_id: str,
+    actor_name: str = typer.Option(os.getenv("USER", "unknown"), "--actor-name"),
+) -> None:
+    """Mark an OpenSpecRef approved (human-only helper)."""
+
+    paths = Paths(Path.cwd())
+    ref_path = paths.repo_root / "openspec" / "refs" / f"{openspec_ref_id}.json"
+    if not ref_path.exists():
+        typer.echo(f"OpenSpecRef not found: {ref_path}")
+        raise typer.Exit(code=2)
+    try:
+        ref = OpenSpecRef.model_validate_json(ref_path.read_text(encoding="utf-8"))
+    except ValidationError as exc:
+        typer.echo(f"OpenSpecRef invalid: {exc}")
+        raise typer.Exit(code=2)
+
+    if ref.state.value != "proposal":
+        typer.echo(f"OpenSpecRef state must be proposal (got {ref.state.value})")
+        raise typer.Exit(code=2)
+
+    from .io import now_utc, write_model
+
+    from .models import OpenSpecState
+
+    ref.state = OpenSpecState.approved
+    ref.approved_at = now_utc()
+    ref.approved_by = Actor(kind="human", name=actor_name)
+    write_model(ref_path, ref)
+    typer.echo(str(ref_path))
+
+
 @agent_app.command("plan")
 def agent_plan(
     bead_id: str,
@@ -270,6 +303,39 @@ def agent_plan(
     actor = Actor(kind="agent", name=actor_name)
     run_plan(paths, bead_id, actor)
 
+
+@agent_app.command("openspec-propose")
+def agent_openspec_propose(
+    bead_id: str,
+    change_id: str = typer.Option(..., "--change-id"),
+    interactive: bool = typer.Option(
+        None, "--interactive/--no-interactive", help="Prompt for Q&A via stdin (CLI only)"
+    ),
+    council: bool = typer.Option(False, "--council/--no-council"),
+    overwrite: bool = typer.Option(False, "--overwrite"),
+    openspec_ref_id: str = typer.Option(None, "--openspec-ref-id"),
+    actor_name: str = typer.Option(os.getenv("USER", "unknown"), "--actor-name"),
+) -> None:
+    """Run the OpenSpec proposal authoring agent and write OpenSpec artifacts."""
+
+    from .agents import run_openspec_propose
+    from .agents.config import AgentSettings
+
+    paths = Paths(Path.cwd())
+    settings = AgentSettings()
+    if interactive is None:
+        interactive = settings.openspec_interactive_default
+    run_openspec_propose(
+        paths,
+        bead_id,
+        change_id,
+        actor=Actor(kind="agent", name=actor_name),
+        interactive=interactive,
+        council=council,
+        overwrite=overwrite,
+        openspec_ref_id=openspec_ref_id,
+        settings=settings,
+    )
 
 @agent_app.command("implement")
 def agent_implement(

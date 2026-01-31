@@ -71,6 +71,11 @@ These commands run the planner, implementation (codex-cli), and verification run
 uv run sdlc grounding generate <bead_id>
 uv run sdlc openspec sync <bead_id>
 
+# Optional: draft an OpenSpec change via agent (authoring only)
+uv run sdlc agent openspec-propose <bead_id> --change-id <change-id>
+# Human approval gate (agent MUST NOT approve)
+uv run sdlc openspec approve-ref openspec-ref-<change-id>
+
 # 1) Plan
 uv run sdlc agent plan <bead_id>
 

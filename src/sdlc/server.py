@@ -440,6 +440,8 @@ def bead_artifacts(bead_id: str, paths: Paths = Depends(get_paths)) -> BeadArtif
         ("codex_prompt", bead_dir / "codex_prompt.md"),
         ("codex_log", bead_dir / "codex.log"),
         ("agent_verify", bead_dir / "agent_verify.json"),
+        ("agent_openspec_json", bead_dir / "agent_openspec.json"),
+        ("agent_openspec_md", bead_dir / "agent_openspec.md"),
     ]
     artifacts = [
         ArtifactStatus(name=name, path=str(p.relative_to(paths.repo_root)), exists=p.exists())
@@ -466,6 +468,49 @@ def agent_plan(
             f"runs/{bead_id}/codex_prompt.md",
         ],
     )
+
+
+class OpenSpecProposeRequest(BaseModel):
+    change_id: str
+    council: bool = False
+    answers: List[str] = Field(default_factory=list)
+    overwrite: bool = False
+    openspec_ref_id: Optional[str] = None
+
+
+@app.post("/api/beads/{bead_id}/agent/openspec-propose", response_model=ActionResponse)
+def agent_openspec_propose(
+    bead_id: str,
+    req: OpenSpecProposeRequest = Body(...),
+    paths: Paths = Depends(get_paths),
+) -> ActionResponse:
+    from .agents import run_openspec_propose
+    from .agents.config import AgentSettings
+
+    settings = AgentSettings()
+    draft = run_openspec_propose(
+        paths,
+        bead_id,
+        req.change_id,
+        actor=Actor(kind="agent", name="sdlc-web"),
+        interactive=False,
+        council=req.council,
+        overwrite=req.overwrite,
+        openspec_ref_id=req.openspec_ref_id,
+        answers=req.answers,
+        settings=settings,
+    )
+    produced = [
+        f"runs/{bead_id}/agent_openspec.json",
+        f"runs/{bead_id}/agent_openspec.md",
+        f"openspec/changes/{req.change_id}/proposal.md",
+        f"openspec/changes/{req.change_id}/tasks.md",
+    ]
+    if draft.design_md:
+        produced.append(f"openspec/changes/{req.change_id}/design.md")
+    produced.extend([df.path for df in draft.delta_files])
+    # Note: OpenSpecRef path is included in the execution record; caller can discover via filesystem.
+    return ActionResponse(ok=True, notes="OpenSpec proposal drafted", produced_artifacts=sorted(set(produced)))
 
 
 @app.post("/api/beads/{bead_id}/agent/implement", response_model=ActionResponse)

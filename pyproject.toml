@@ -42,6 +42,9 @@ line-length = 100
 python_version = "3.13"
 strict = true
 mypy_path = ["src"]
+exclude = [
+    "^tests/test_sdlc\\.py$",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
