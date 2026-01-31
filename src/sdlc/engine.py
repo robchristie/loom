@@ -144,16 +144,20 @@ def load_boundary_registry(paths: Paths, bead: Bead) -> tuple[BoundaryRegistry, 
 
 
 def detect_changed_files(paths: Paths, head_before: Optional[str] = None) -> list[str]:
+    if git_head(paths) is None:
+        return []
     try:
         if head_before:
             output = subprocess.check_output(
                 ["git", "diff", "--name-only", f"{head_before}..HEAD"],
                 cwd=paths.repo_root,
+                stderr=subprocess.DEVNULL,
             )
         else:
             output = subprocess.check_output(
                 ["git", "diff", "--name-only", "HEAD"],
                 cwd=paths.repo_root,
+                stderr=subprocess.DEVNULL,
             )
         return [line.strip() for line in output.decode("utf-8").splitlines() if line.strip()]
     except subprocess.CalledProcessError:

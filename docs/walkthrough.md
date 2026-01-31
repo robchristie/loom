@@ -277,7 +277,7 @@ cat > runs/work-helloapp/bead_review.json << 'EOF'
     }
   ],
 
-  "notes_md": "Single check is enough for the demo; tests cover behavior."
+  "notes": "Single check is enough for the demo; tests cover behavior."
 }
 EOF
 ```

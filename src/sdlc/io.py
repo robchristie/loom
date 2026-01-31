@@ -206,7 +206,11 @@ def load_execution_records(paths: Paths) -> list[ExecutionRecord]:
 def git_head(paths: Paths) -> Optional[str]:
     try:
         return (
-            subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=paths.repo_root)
+            subprocess.check_output(
+                ["git", "rev-parse", "HEAD"],
+                cwd=paths.repo_root,
+                stderr=subprocess.DEVNULL,
+            )
             .decode("utf-8")
             .strip()
         )
@@ -216,7 +220,11 @@ def git_head(paths: Paths) -> Optional[str]:
 
 def git_is_dirty(paths: Paths) -> Optional[bool]:
     try:
-        output = subprocess.check_output(["git", "status", "--porcelain"], cwd=paths.repo_root)
+        output = subprocess.check_output(
+            ["git", "status", "--porcelain"],
+            cwd=paths.repo_root,
+            stderr=subprocess.DEVNULL,
+        )
     except subprocess.CalledProcessError:
         return None
     return bool(output.strip())

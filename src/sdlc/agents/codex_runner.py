@@ -37,7 +37,28 @@ def run_codex(
     head_before = git_head(paths)
     dirty_before = git_is_dirty(paths)
 
-    cmd = [codex_bin, *codex_args]
+    subcommands = {
+        "exec",
+        "review",
+        "login",
+        "logout",
+        "mcp",
+        "mcp-server",
+        "app-server",
+        "completion",
+        "sandbox",
+        "apply",
+        "resume",
+        "fork",
+        "cloud",
+        "features",
+        "help",
+    }
+    has_subcommand = any(arg in subcommands for arg in codex_args)
+    if not has_subcommand:
+        cmd = [codex_bin, *codex_args, "exec", "-"]
+    else:
+        cmd = [codex_bin, *codex_args]
 
     # Feed the prompt via stdin to avoid codex-specific flags.
     stdin_bytes = prompt_path.read_bytes()
@@ -63,4 +84,3 @@ def run_codex(
         dirty_before=dirty_before,
         dirty_after=dirty_after,
     )
-
