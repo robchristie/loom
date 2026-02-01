@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -63,7 +65,41 @@ def load_json(path: Path) -> Any:
 
 def dump_json(path: Path, payload: Any) -> None:
     ensure_parent(path)
-    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    content = json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
+    atomic_write_text(path, content, encoding="utf-8")
+
+
+def atomic_write_text(path: Path, content: str, *, encoding: str = "utf-8") -> None:
+    """
+    Atomically write text to `path` using a temp file + replace.
+
+    This prevents readers (e.g. the web UI) from observing partial/truncated files.
+    """
+    ensure_parent(path)
+    directory = path.parent
+    tmp_fd: int | None = None
+    tmp_path: Path | None = None
+    try:
+        tmp_fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=directory)
+        tmp_path = Path(tmp_name)
+        with os.fdopen(tmp_fd, "w", encoding=encoding) as handle:
+            tmp_fd = None
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_path, path)
+        tmp_path = None
+    finally:
+        if tmp_fd is not None:
+            try:
+                os.close(tmp_fd)
+            except OSError:
+                pass
+        if tmp_path is not None:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 def append_jsonl(path: Path, payload: Any) -> None:

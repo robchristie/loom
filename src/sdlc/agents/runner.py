@@ -4,7 +4,12 @@ import asyncio
 from pathlib import Path
 from typing import Callable, List, Optional
 
-from ..engine import build_execution_record, detect_changed_files, request_transition, validate_evidence_bundle
+from ..engine import (
+    build_execution_record,
+    detect_changed_files,
+    request_transition,
+    validate_evidence_bundle,
+)
 from ..io import Paths, load_bead, load_execution_records, load_grounding, write_execution_record
 from ..models import Actor, BeadStatus, FileRef, GitRef, RunPhase
 from .codex_runner import run_codex
@@ -15,7 +20,12 @@ from .openrouter import openrouter_model
 from .planner import PlannerDeps, run_planner
 from .schemas import AgentPlan, OpenSpecDraft, OpenSpecInterview
 from .verifier import VerifierDeps, run_verifier
-from .openspec_proposer import OpenSpecProposerDeps, run_openspec_draft, run_openspec_interview, run_openspec_synth
+from .openspec_proposer import (
+    OpenSpecProposerDeps,
+    run_openspec_draft,
+    run_openspec_interview,
+    run_openspec_synth,
+)
 
 
 def _bead_markdown(bead_id: str, paths: Paths) -> str:
@@ -149,15 +159,15 @@ def _policy_violation_notes(changed_files: List[str], grounded_files: set[str]) 
 
 
 def _write_json(path: Path, obj: object) -> None:
-    from ..io import ensure_parent
+    from ..io import atomic_write_text, ensure_parent
 
     ensure_parent(path)
     if hasattr(obj, "model_dump_json"):
-        path.write_text(getattr(obj, "model_dump_json")(indent=2) + "\n", encoding="utf-8")
+        atomic_write_text(path, getattr(obj, "model_dump_json")(indent=2) + "\n", encoding="utf-8")
     else:
         import json
 
-        path.write_text(json.dumps(obj, indent=2) + "\n", encoding="utf-8")
+        atomic_write_text(path, json.dumps(obj, indent=2) + "\n", encoding="utf-8")
 
 
 def _write_agent_model(paths: Paths, path: Path, model: object) -> None:
@@ -197,12 +207,12 @@ def _derive_openspec_ref_id(change_id: str) -> str:
 
 
 def _write_text(path: Path, content: str) -> None:
-    from ..io import ensure_parent
+    from ..io import atomic_write_text, ensure_parent
 
     ensure_parent(path)
     if not content.endswith("\n"):
         content += "\n"
-    path.write_text(content, encoding="utf-8")
+    atomic_write_text(path, content, encoding="utf-8")
 
 
 def run_openspec_propose(
@@ -243,7 +253,9 @@ def run_openspec_propose(
     openspec_proj = _default_openspec_project_md(paths)
 
     transcript_lines: list[str] = []
-    transcript_lines.append(f"# OpenSpec Proposal Interview Transcript\n\nBead: `{bead_id}`\nChange: `{change_id}`\n")
+    transcript_lines.append(
+        f"# OpenSpec Proposal Interview Transcript\n\nBead: `{bead_id}`\nChange: `{change_id}`\n"
+    )
 
     deps = OpenSpecProposerDeps(
         bead_markdown=bead_md,
@@ -359,10 +371,14 @@ def run_openspec_propose(
     agent_json_path = paths.bead_dir(bead_id) / "agent_openspec.json"
     agent_md_path = paths.bead_dir(bead_id) / "agent_openspec.md"
     _write_agent_model(paths, agent_json_path, draft)
-    _write_text(agent_md_path, "\n".join(transcript_lines) + "\n\n## Summary\n\n- Generated OpenSpec change artifacts.\n")
+    _write_text(
+        agent_md_path,
+        "\n".join(transcript_lines) + "\n\n## Summary\n\n- Generated OpenSpec change artifacts.\n",
+    )
 
     # Journal
     from ..io import git_head, git_is_dirty, write_execution_record
+
     produced: list[FileRef] = [
         FileRef(path=f"runs/{bead_id}/agent_openspec.json"),
         FileRef(path=f"runs/{bead_id}/agent_openspec.md"),
@@ -394,6 +410,7 @@ def run_openspec_propose(
     # Link to bead.openspec_ref is intentionally not done here; that's a separate sync/approval flow.
     _ = bead  # explicitly unused, but ensures bead was loaded for context
     return draft
+
 
 def run_plan(
     paths: Paths,
@@ -457,7 +474,9 @@ def run_implement(
     bead = load_bead(paths, bead_id)
     if auto_transition and bead.status == BeadStatus.ready:
         # Transition requests are always validated by the engine.
-        request_transition(paths, bead_id, "ready -> in_progress", Actor(kind="system", name="sdlc"))
+        request_transition(
+            paths, bead_id, "ready -> in_progress", Actor(kind="system", name="sdlc")
+        )
 
     prompt_path = paths.bead_dir(bead_id) / "codex_prompt.md"
     if not prompt_path.exists():
@@ -518,7 +537,9 @@ def run_verify(
     auto_transition: Optional[bool] = None,
     settings: Optional[AgentSettings] = None,
     model_override: object | None = None,
-    evidence_subprocess_runner: Callable[..., EvidenceRunResult] = run_acceptance_checks_to_evidence,
+    evidence_subprocess_runner: Callable[
+        ..., EvidenceRunResult
+    ] = run_acceptance_checks_to_evidence,
 ) -> int:
     settings = settings or AgentSettings()
     if auto_transition is None:
@@ -577,7 +598,13 @@ def run_verify(
         exit_code=0 if ok else 1,
         commands=result.commands,
         produced_artifacts=sorted(
-            {ref.path: ref for ref in (verify_artifacts + [FileRef(path=p) for p in result.produced_paths if p.startswith("runs/")])}.values(),
+            {
+                ref.path: ref
+                for ref in (
+                    verify_artifacts
+                    + [FileRef(path=p) for p in result.produced_paths if p.startswith("runs/")]
+                )
+            }.values(),
             key=lambda r: r.path,
         ),
         notes_md="; ".join(errors) if errors else None,

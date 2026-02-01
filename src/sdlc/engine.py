@@ -10,7 +10,6 @@ from typing import Callable, Iterable, Optional
 from .codec import sha256_canonical_json
 from .io import (
     Paths,
-    ensure_parent,
     git_head,
     git_is_dirty,
     load_bead,
@@ -309,11 +308,9 @@ def _write_ready_acceptance_snapshot(paths: Paths, bead: Bead) -> None:
         "acceptance_checks_hash": canonical_hash_for_acceptance_checks(bead.acceptance_checks).hash,
         "bead_hash": canonical_hash_for_model(bead).hash,
     }
-    ensure_parent(snapshot_path)
-    snapshot_path.write_text(
-        json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
-        encoding="utf-8",
-    )
+    from .io import dump_json
+
+    dump_json(snapshot_path, payload)
 
 
 def _load_ready_acceptance_snapshot(paths: Paths, bead_id: str) -> Optional[dict[str, str]]:
@@ -378,9 +375,7 @@ def _bucket_l_justification_decision(paths: Paths, bead_id: str) -> Optional[Dec
     return None
 
 
-def _plan_gate_bucket_l(
-    paths: Paths, bead_id: str, review: Optional[BeadReview]
-) -> Optional[str]:
+def _plan_gate_bucket_l(paths: Paths, bead_id: str, review: Optional[BeadReview]) -> Optional[str]:
     if review is None:
         return None
     if review.effort_bucket != EffortBucket.L:
@@ -428,9 +423,7 @@ def anti_stall_errors(paths: Paths, bead: Bead) -> list[str]:
     if max_elapsed is not None:
         elapsed = _elapsed_minutes(bead)
         if elapsed > max_elapsed:
-            errors.append(
-                f"Anti-stall: elapsed_minutes={elapsed} exceeds limit {max_elapsed}"
-            )
+            errors.append(f"Anti-stall: elapsed_minutes={elapsed} exceeds limit {max_elapsed}")
     max_interventions = bead.max_interventions
     if max_interventions is None:
         max_interventions = _env_optional_int("SDLC_MAX_INTERVENTIONS_DEFAULT")
@@ -447,13 +440,9 @@ def anti_stall_errors(paths: Paths, bead: Bead) -> list[str]:
 
 
 def _phase_for_transition(from_status: str, to_status: str) -> RunPhase:
-    if to_status in {"sized", "ready"}:
-        return RunPhase.plan
-    if to_status in {"in_progress", "verification_pending"}:
-        return RunPhase.implement
-    if to_status in {"verified", "approval_pending", "done"}:
-        return RunPhase.verify
-    return RunPhase.implement
+    from .phase import phase_for_status_transition
+
+    return phase_for_status_transition(from_status, to_status)
 
 
 def _spec_gate(paths: Paths, bead: Bead) -> Optional[str]:
@@ -531,9 +520,13 @@ def _apply_transition(bead: Bead, new_status: BeadStatus) -> None:
     bead.status = new_status
 
 
-def request_transition(paths: Paths, bead_id: str, transition: str, actor: Actor) -> TransitionResult:
+def request_transition(
+    paths: Paths, bead_id: str, transition: str, actor: Actor
+) -> TransitionResult:
     bead = load_bead(paths, bead_id)
-    phase_hint = RunPhase.plan if bead.status in {BeadStatus.draft, BeadStatus.sized} else RunPhase.implement
+    phase_hint = (
+        RunPhase.plan if bead.status in {BeadStatus.draft, BeadStatus.sized} else RunPhase.implement
+    )
     if bead.status in {
         BeadStatus.verification_pending,
         BeadStatus.verified,
@@ -635,7 +628,9 @@ def request_transition(paths: Paths, bead_id: str, transition: str, actor: Actor
         grounding_error = _grounding_gate(paths, bead)
         if grounding_error:
             errors.append(grounding_error)
-    elif bead.status == BeadStatus.in_progress and to_status == BeadStatus.verification_pending.value:
+    elif (
+        bead.status == BeadStatus.in_progress and to_status == BeadStatus.verification_pending.value
+    ):
         pass
     elif bead.status == BeadStatus.verification_pending and to_status == BeadStatus.verified.value:
         evidence_error = _evidence_gate(paths, bead)
@@ -654,9 +649,7 @@ def request_transition(paths: Paths, bead_id: str, transition: str, actor: Actor
                 evaluation.files_touched > max_files
                 or len(evaluation.touched_subsystems) > max_subsystems
             ):
-                info_notes.append(
-                    boundary_violation_notes(evaluation, max_files, max_subsystems)
-                )
+                info_notes.append(boundary_violation_notes(evaluation, max_files, max_subsystems))
                 info_notes.append(
                     "Boundary limit exceeded: forcing abort to aborted:needs-discovery"
                 )
@@ -849,7 +842,9 @@ def evidence_validation_errors(
 ) -> list[str]:
     errors: list[str] = []
 
-    manual_items = [item for item in evidence.items if item.evidence_type == EvidenceType.manual_check]
+    manual_items = [
+        item for item in evidence.items if item.evidence_type == EvidenceType.manual_check
+    ]
     if manual_items:
         if evidence.created_by.kind != "human":
             errors.append("Manual check evidence requires human bundle creator")
@@ -886,7 +881,9 @@ def evidence_validation_errors(
     return errors
 
 
-def _find_item_for_check(evidence: EvidenceBundle, check: AcceptanceCheck) -> Optional[EvidenceItem]:
+def _find_item_for_check(
+    evidence: EvidenceBundle, check: AcceptanceCheck
+) -> Optional[EvidenceItem]:
     for item in evidence.items:
         if item.name == check.name:
             return item
@@ -938,10 +935,16 @@ def _covered_by_human_summary(check: AcceptanceCheck, evidence: EvidenceBundle) 
 def _covered_by_output(check: AcceptanceCheck, evidence: EvidenceBundle) -> bool:
     if not check.expected_outputs:
         return False
-    expected = {(ref.path, ref.content_hash.hash if ref.content_hash else None) for ref in check.expected_outputs}
+    expected = {
+        (ref.path, ref.content_hash.hash if ref.content_hash else None)
+        for ref in check.expected_outputs
+    }
     for item in evidence.items:
         for attachment in item.attachments:
-            key = (attachment.path, attachment.content_hash.hash if attachment.content_hash else None)
+            key = (
+                attachment.path,
+                attachment.content_hash.hash if attachment.content_hash else None,
+            )
             if key in expected:
                 return True
     return False
@@ -1032,7 +1035,11 @@ def invalidate_evidence_if_stale(paths: Paths, bead_id: str, actor: Actor) -> Op
 def generate_grounding_bundle(paths: Paths, bead_id: str, actor: Actor) -> None:
     bead = load_bead(paths, bead_id)
     items = []
-    for path in ["README.md", "docs/loom-specification.md", "openspec/changes/bootstrap-agentic-sdlc-v1/proposal.md"]:
+    for path in [
+        "README.md",
+        "docs/loom-specification.md",
+        "openspec/changes/bootstrap-agentic-sdlc-v1/proposal.md",
+    ]:
         file_path = paths.repo_root / path
         if file_path.exists():
             items.append(
@@ -1065,9 +1072,7 @@ def append_decision_entry(paths: Paths, entry: DecisionLedgerEntry) -> None:
     write_decision_entry(paths, entry)
 
 
-def find_active_exception_decision(
-    paths: Paths, bead_id: str
-) -> Optional[DecisionLedgerEntry]:
+def find_active_exception_decision(paths: Paths, bead_id: str) -> Optional[DecisionLedgerEntry]:
     most_recent: Optional[DecisionLedgerEntry] = None
     now = now_utc()
     for entry in load_decision_ledger(paths):
@@ -1116,9 +1121,7 @@ def record_transition_attempt(
         links.extend(result.links)
     notes_md = result.notes or None
     if result.auto_abort:
-        decision = create_abort_entry(
-            bead_id, "ABORT: boundary or anti-stall enforcement", actor
-        )
+        decision = create_abort_entry(bead_id, "ABORT: boundary or anti-stall enforcement", actor)
         write_decision_entry(paths, decision)
         if result.applied_transition:
             from_status = result.applied_transition.split("->", 1)[0].strip()

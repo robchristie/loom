@@ -20,19 +20,29 @@ class AgentSettings(BaseSettings):
         default="https://openrouter.ai/api/v1", validation_alias="LOOM_OPENROUTER_BASE_URL"
     )
     planner_model: str = Field(default="openai/gpt-4o-mini", validation_alias="LOOM_PLANNER_MODEL")
-    verifier_model: str = Field(default="openai/gpt-4o-mini", validation_alias="LOOM_VERIFIER_MODEL")
+    verifier_model: str = Field(
+        default="openai/gpt-4o-mini", validation_alias="LOOM_VERIFIER_MODEL"
+    )
 
     # OpenSpec proposal authoring
     openspec_model: str = Field(default="", validation_alias="LOOM_OPENSPEC_MODEL")
-    openspec_council_models: List[str] = Field(default_factory=list, validation_alias="LOOM_OPENSPEC_COUNCIL_MODELS")
+    openspec_council_models: List[str] = Field(
+        default_factory=list, validation_alias="LOOM_OPENSPEC_COUNCIL_MODELS"
+    )
     openspec_synth_model: str = Field(default="", validation_alias="LOOM_OPENSPEC_SYNTH_MODEL")
-    openspec_interview_rounds_max: int = Field(default=2, validation_alias="LOOM_OPENSPEC_INTERVIEW_ROUNDS_MAX")
-    openspec_interactive_default: bool = Field(default=True, validation_alias="LOOM_OPENSPEC_INTERACTIVE_DEFAULT")
+    openspec_interview_rounds_max: int = Field(
+        default=2, validation_alias="LOOM_OPENSPEC_INTERVIEW_ROUNDS_MAX"
+    )
+    openspec_interactive_default: bool = Field(
+        default=True, validation_alias="LOOM_OPENSPEC_INTERACTIVE_DEFAULT"
+    )
 
     codex_bin: str = Field(default="codex", validation_alias="LOOM_CODEX_BIN")
     codex_args: List[str] = Field(default_factory=list, validation_alias="LOOM_CODEX_ARGS")
 
-    agent_auto_transition: bool = Field(default=False, validation_alias="LOOM_AGENT_AUTO_TRANSITION")
+    agent_auto_transition: bool = Field(
+        default=False, validation_alias="LOOM_AGENT_AUTO_TRANSITION"
+    )
 
     @field_validator("codex_args", mode="before")
     @classmethod

@@ -116,7 +116,9 @@ def run_openspec_draft(model: object, deps: OpenSpecProposerDeps) -> OpenSpecDra
     return result.output
 
 
-def run_openspec_synth(model: object, deps: OpenSpecProposerDeps, drafts: Sequence[OpenSpecDraft]) -> OpenSpecDraft:
+def run_openspec_synth(
+    model: object, deps: OpenSpecProposerDeps, drafts: Sequence[OpenSpecDraft]
+) -> OpenSpecDraft:
     # Provide drafts in-band as markdown for simplicity/determinism.
     blocks: List[str] = []
     for i, d in enumerate(drafts, start=1):
@@ -142,8 +144,7 @@ def run_openspec_synth(model: object, deps: OpenSpecProposerDeps, drafts: Sequen
         )
     prompt = (
         f"Change-id: `{deps.change_id}`\n\n"
-        "Synthesize ONE final OpenSpecDraft from the following drafts.\n\n"
-        + "\n\n".join(blocks)
+        "Synthesize ONE final OpenSpecDraft from the following drafts.\n\n" + "\n\n".join(blocks)
     )
     agent = _synth_agent()
     result = asyncio.run(agent.run(prompt, deps=deps, model=cast(Any, model)))

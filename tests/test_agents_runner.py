@@ -29,7 +29,7 @@ def _write_min_bead(paths: Paths, bead_id: str) -> None:
         "acceptance_checks": [
             {
                 "name": "pytest",
-                "command": "python -c \"import sys; sys.exit(0)\"",
+                "command": 'python -c "import sys; sys.exit(0)"',
                 "expect_exit_code": 0,
             }
         ],
@@ -56,7 +56,9 @@ def test_plan_persists_outputs_and_journals(tmp_path: Path) -> None:
 
     assert (paths.bead_dir(bead_id) / "agent_plan.json").exists()
     assert (paths.bead_dir(bead_id) / "codex_prompt.md").exists()
-    assert "codex" in (paths.bead_dir(bead_id) / "codex_prompt.md").read_text(encoding="utf-8").lower()
+    assert (
+        "codex" in (paths.bead_dir(bead_id) / "codex_prompt.md").read_text(encoding="utf-8").lower()
+    )
     assert plan.codex_prompt_md
 
     journal = paths.journal_path.read_text(encoding="utf-8").splitlines()

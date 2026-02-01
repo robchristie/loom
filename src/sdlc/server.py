@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import re
 from pathlib import Path
@@ -68,13 +69,17 @@ from .models import (
     OpenSpecRef,
     RunPhase,
 )
+from .phase import phase_for_transition_str
 
 BEAD_ID_RE = re.compile(r"^work-[a-z0-9]+(\.[a-z0-9]+)?$")
+
+logger = logging.getLogger(__name__)
 
 
 # ----------------------------
 # API models (thin wrappers)
 # ----------------------------
+
 
 class RepoInfo(BaseModel):
     repo_root: str
@@ -137,6 +142,7 @@ class ActionResponse(BaseModel):
 # Utilities / dependencies
 # ----------------------------
 
+
 def _default_actor(kind: str = "human") -> Actor:
     return Actor(kind=kind, name=os.getenv("USER", "unknown"))  # type: ignore[arg-type]
 
@@ -145,25 +151,6 @@ def get_paths() -> Paths:
     root = os.getenv("SDLC_REPO_ROOT")
     repo_root = Path(root).resolve() if root else Path.cwd().resolve()
     return Paths(repo_root)
-
-
-def _phase_for_transition(transition: str) -> RunPhase:
-    """
-    Same mapping concept as CLI: journaling phase should reflect where in lifecycle
-    the request sits (plan/implement/verify). Best-effort.
-    """
-    m = re.match(r"^\s*([^-\s>]+)\s*->\s*([^-\s>]+)\s*$", transition)
-    if not m:
-        return RunPhase.implement
-    to_status = m.group(2).strip()
-
-    if to_status in {"sized", "ready"}:
-        return RunPhase.plan
-    if to_status in {"in_progress", "verification_pending"}:
-        return RunPhase.implement
-    if to_status in {"verified", "approval_pending", "done"}:
-        return RunPhase.verify
-    return RunPhase.implement
 
 
 def _decision_action_phase_for_bead(paths: Paths, bead_id: str) -> RunPhase:
@@ -184,6 +171,7 @@ def _safe_read_json(path: Path) -> Optional[dict[str, Any]]:
         payload = json.loads(path.read_text(encoding="utf-8"))
         return payload if isinstance(payload, dict) else None
     except Exception:
+        logger.exception("Failed to read JSON artifact", extra={"path": str(path)})
         return None
 
 
@@ -236,6 +224,7 @@ def _iter_bd_issue_dicts(paths: Paths) -> Iterable[dict[str, Any]]:
             # if it's a single issue dict
             return [payload]
     except Exception:
+        logger.exception("Failed to parse bd issues store as JSON", extra={"path": str(p)})
         pass
 
     # Fallback: parse line-by-line JSONL
@@ -246,6 +235,7 @@ def _iter_bd_issue_dicts(paths: Paths) -> Iterable[dict[str, Any]]:
         try:
             obj = json.loads(line)
         except Exception:
+            logger.exception("Failed to parse bd issues JSONL line", extra={"path": str(p)})
             continue
         if isinstance(obj, dict):
             out.append(obj)
@@ -299,6 +289,7 @@ def _bead_from_bd_issue(data: dict[str, Any]) -> Optional[Bead]:
     try:
         return Bead.model_validate(bead_payload)
     except Exception:
+        logger.exception("Failed to convert bd issue to Bead", extra={"bead_id": str(bead_id)})
         return None
 
 
@@ -310,6 +301,7 @@ def _list_beads(paths: Paths) -> List[Bead]:
         try:
             by_id[bead_id] = load_bead(paths, bead_id)
         except Exception:
+            logger.exception("Failed to load bead from runs", extra={"bead_id": bead_id})
             continue
 
     # 2) Also include bd store items not yet materialized into runs/<id>/bead.json
@@ -510,7 +502,9 @@ def agent_openspec_propose(
         produced.append(f"openspec/changes/{req.change_id}/design.md")
     produced.extend([df.path for df in draft.delta_files])
     # Note: OpenSpecRef path is included in the execution record; caller can discover via filesystem.
-    return ActionResponse(ok=True, notes="OpenSpec proposal drafted", produced_artifacts=sorted(set(produced)))
+    return ActionResponse(
+        ok=True, notes="OpenSpec proposal drafted", produced_artifacts=sorted(set(produced))
+    )
 
 
 @app.post("/api/beads/{bead_id}/agent/implement", response_model=ActionResponse)
@@ -598,7 +592,7 @@ def transition_bead(
 ) -> TransitionResponse:
     actor = req.actor or _default_actor("human")
     result = request_transition(paths, bead_id, req.transition, actor)
-    phase = _phase_for_transition(req.transition)
+    phase = phase_for_transition_str(req.transition)
     record = record_transition_attempt(paths, bead_id, phase, actor, req.transition, result)
 
     return TransitionResponse(
@@ -661,7 +655,9 @@ def evidence_collect(
 @app.post("/api/beads/{bead_id}/evidence/validate", response_model=ActionResponse)
 def evidence_validate(
     bead_id: str,
-    mark_validated: bool = Query(True, description="If true, set EvidenceBundle.status=validated on success"),
+    mark_validated: bool = Query(
+        True, description="If true, set EvidenceBundle.status=validated on success"
+    ),
     actor: Optional[Actor] = Body(None),
     paths: Paths = Depends(get_paths),
 ) -> ActionResponse:
@@ -685,7 +681,9 @@ def evidence_validate(
         exit_code=0 if not errors else 1,
         notes_md="; ".join(errors) if errors else "Evidence validated",
         git=git_ref,
-        produced_artifacts=[FileRef(path=f"runs/{bead_id}/evidence.json")] if evidence_after else [],
+        produced_artifacts=[FileRef(path=f"runs/{bead_id}/evidence.json")]
+        if evidence_after
+        else [],
     )
     write_execution_record(paths, record)
 
@@ -794,7 +792,7 @@ def abort_bead(
     result = request_transition(paths, bead_id, requested, actor)
 
     # 4) Journal the transition attempt, linking the decision entry
-    phase = _phase_for_transition(requested)
+    phase = phase_for_transition_str(requested)
     record = record_transition_attempt(
         paths,
         bead_id,
@@ -818,6 +816,7 @@ def abort_bead(
 # ----------------------------
 # Server-Sent Events (SSE)
 # ----------------------------
+
 
 async def _tail_jsonl(
     path: Path,
@@ -858,6 +857,9 @@ async def _tail_jsonl(
                         try:
                             obj = json.loads(raw)
                         except Exception:
+                            logger.exception(
+                                "Failed to parse SSE line as JSON", extra={"path": str(path)}
+                            )
                             continue
                         obj_bead = obj.get("bead_id")
                         if obj_bead != bead_id:
@@ -867,6 +869,7 @@ async def _tail_jsonl(
                     yield f"event: {event_name}\ndata: {raw}\n\n"
         except Exception:
             # If file is mid-rotate or transiently unreadable, just retry.
+            logger.exception("Failed to tail events file", extra={"path": str(path)})
             await asyncio.sleep(poll_seconds)
 
         await asyncio.sleep(poll_seconds)
@@ -886,6 +889,7 @@ async def events(
 
     Tip: if you put nginx in front, disable proxy buffering for this route.
     """
+
     async def stream() -> AsyncIterator[str]:
         # small initial hello (helps some clients)
         yield "event: hello\ndata: {}\n\n"
@@ -935,6 +939,7 @@ async def events(
             "Connection": "keep-alive",
         },
     )
+
 
 @app.get("/api/beads/{bead_id}/openspec-ref", response_model=Optional[OpenSpecRef])
 def get_openspec_ref(bead_id: str, paths: Paths = Depends(get_paths)) -> Optional[OpenSpecRef]:

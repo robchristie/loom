@@ -198,7 +198,8 @@ def test_boundary_enforcement_blocks_verification_and_links_registry(
     assert records
     last = records[-1]
     assert any(
-        link.artifact_type == "boundary_registry" and link.artifact_id == "boundary-registry-enforce"
+        link.artifact_type == "boundary_registry"
+        and link.artifact_id == "boundary-registry-enforce"
         for link in last.links
     )
 
@@ -206,7 +207,11 @@ def test_boundary_enforcement_blocks_verification_and_links_registry(
 def test_discovery_policy_blocks_production_paths(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from sdlc.engine import record_transition_attempt, request_transition, _write_ready_acceptance_snapshot
+    from sdlc.engine import (
+        record_transition_attempt,
+        request_transition,
+        _write_ready_acceptance_snapshot,
+    )
     from sdlc.io import Paths, load_execution_records, write_model
 
     paths = Paths(tmp_path)
@@ -266,10 +271,12 @@ def test_discovery_policy_blocks_production_paths(
     assert any(link.artifact_type == "boundary_registry" for link in last.links)
 
 
-def test_discovery_policy_allows_allowlist(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from sdlc.engine import record_transition_attempt, request_transition, _write_ready_acceptance_snapshot
+def test_discovery_policy_allows_allowlist(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from sdlc.engine import (
+        record_transition_attempt,
+        request_transition,
+        _write_ready_acceptance_snapshot,
+    )
     from sdlc.io import Paths, load_execution_records, write_model
 
     paths = Paths(tmp_path)
@@ -625,7 +632,9 @@ def test_illegal_transition_notes_are_specific(tmp_path: Path) -> None:
     assert "sized -> in_progress" in result.notes
 
 
-def test_request_records_phase_from_transition(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_request_records_phase_from_transition(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from sdlc.io import Paths, write_model
 
     monkeypatch.chdir(tmp_path)
@@ -858,6 +867,7 @@ def test_exception_profile_requires_decision_and_no_applied_transition(
     last = records[-1]
     assert last.applied_transition is None
 
+
 def test_approve_allows_non_prefixed_summary(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -968,7 +978,11 @@ def test_evidence_validate_requires_expected_exit_code_match(tmp_path: Path) -> 
         created_by=Actor(kind="system", name="tester"),
         bead_id=bead_id,
         status=EvidenceStatus.collected,
-        items=[EvidenceItem(name="cmd", evidence_type=EvidenceType.test_run, command="run", exit_code=0)],
+        items=[
+            EvidenceItem(
+                name="cmd", evidence_type=EvidenceType.test_run, command="run", exit_code=0
+            )
+        ],
     )
     write_model(paths.bead_path(bead_id), bead)
     write_model(paths.evidence_path(bead_id), evidence)
@@ -1006,11 +1020,17 @@ def test_evidence_validate_allows_nonzero_expected_exit_code(tmp_path: Path) -> 
         bead_id=bead_id,
         status=EvidenceStatus.collected,
         for_bead_hash=canonical_hash_for_model(bead),
-        items=[EvidenceItem(name="cmd", evidence_type=EvidenceType.test_run, command="run", exit_code=2)],
+        items=[
+            EvidenceItem(
+                name="cmd", evidence_type=EvidenceType.test_run, command="run", exit_code=2
+            )
+        ],
     )
     write_model(paths.bead_path(bead_id), bead)
     write_model(paths.evidence_path(bead_id), evidence)
-    evidence_after, errors = validate_evidence_bundle(paths, bead_id, Actor(kind="system", name="tester"))
+    evidence_after, errors = validate_evidence_bundle(
+        paths, bead_id, Actor(kind="system", name="tester")
+    )
     assert evidence_after is not None
     assert evidence_after.status == EvidenceStatus.validated
     assert not errors
@@ -1066,7 +1086,9 @@ def test_evidence_validation_prefers_name_over_command(tmp_path: Path) -> None:
     )
     write_model(paths.bead_path(bead_id), bead)
     write_model(paths.evidence_path(bead_id), evidence)
-    evidence_after, errors = validate_evidence_bundle(paths, bead_id, Actor(kind="system", name="tester"))
+    evidence_after, errors = validate_evidence_bundle(
+        paths, bead_id, Actor(kind="system", name="tester")
+    )
     assert evidence_after is not None
     assert evidence_after.status == EvidenceStatus.validated
     assert not errors
@@ -1102,11 +1124,17 @@ def test_evidence_validate_rejects_bead_hash_mismatch(tmp_path: Path) -> None:
         bead_id=bead_id,
         status=EvidenceStatus.collected,
         for_bead_hash=HashRef(hash_alg="sha256", hash="0" * 64),
-        items=[EvidenceItem(name="cmd", evidence_type=EvidenceType.test_run, command="run", exit_code=0)],
+        items=[
+            EvidenceItem(
+                name="cmd", evidence_type=EvidenceType.test_run, command="run", exit_code=0
+            )
+        ],
     )
     write_model(paths.bead_path(bead_id), bead)
     write_model(paths.evidence_path(bead_id), evidence)
-    evidence_after, errors = validate_evidence_bundle(paths, bead_id, Actor(kind="system", name="tester"))
+    evidence_after, errors = validate_evidence_bundle(
+        paths, bead_id, Actor(kind="system", name="tester")
+    )
     assert evidence_after is not None
     assert evidence_after.status == EvidenceStatus.collected
     assert any("bead hash" in error for error in errors)
@@ -1143,11 +1171,17 @@ def test_evidence_validate_sets_status_validated_on_success(tmp_path: Path) -> N
         bead_id=bead_id,
         status=EvidenceStatus.collected,
         for_bead_hash=bead_hash,
-        items=[EvidenceItem(name="cmd", evidence_type=EvidenceType.test_run, command="run", exit_code=0)],
+        items=[
+            EvidenceItem(
+                name="cmd", evidence_type=EvidenceType.test_run, command="run", exit_code=0
+            )
+        ],
     )
     write_model(paths.bead_path(bead_id), bead)
     write_model(paths.evidence_path(bead_id), evidence)
-    evidence_after, errors = validate_evidence_bundle(paths, bead_id, Actor(kind="system", name="tester"))
+    evidence_after, errors = validate_evidence_bundle(
+        paths, bead_id, Actor(kind="system", name="tester")
+    )
     assert evidence_after is not None
     assert not errors
     assert evidence_after.status == EvidenceStatus.validated
@@ -1288,7 +1322,9 @@ def test_full_flow_smoke(tmp_path: Path) -> None:
 
     result = request_transition(paths, bead_id, "ready -> in_progress", actor)
     assert result.ok
-    record_transition_attempt(paths, bead_id, RunPhase.implement, actor, "ready -> in_progress", result)
+    record_transition_attempt(
+        paths, bead_id, RunPhase.implement, actor, "ready -> in_progress", result
+    )
 
     current_bead = Bead.model_validate_json(paths.bead_path(bead_id).read_text(encoding="utf-8"))
     evidence = EvidenceBundle(
@@ -1310,7 +1346,9 @@ def test_full_flow_smoke(tmp_path: Path) -> None:
         ],
     )
     write_model(paths.evidence_path(bead_id), evidence)
-    evidence_after, errors = validate_evidence_bundle(paths, bead_id, Actor(kind="system", name="tester"))
+    evidence_after, errors = validate_evidence_bundle(
+        paths, bead_id, Actor(kind="system", name="tester")
+    )
     assert evidence_after is not None
     assert not errors
     assert evidence_after.status == EvidenceStatus.validated
@@ -1339,7 +1377,9 @@ def test_full_flow_smoke(tmp_path: Path) -> None:
 
     result = request_transition(paths, bead_id, "approval_pending -> done", actor)
     assert result.ok
-    record_transition_attempt(paths, bead_id, RunPhase.verify, actor, "approval_pending -> done", result)
+    record_transition_attempt(
+        paths, bead_id, RunPhase.verify, actor, "approval_pending -> done", result
+    )
 
     final_bead = Bead.model_validate_json(paths.bead_path(bead_id).read_text(encoding="utf-8"))
     assert final_bead.status == BeadStatus.done
@@ -1381,7 +1421,11 @@ def test_evidence_validate_records_git_and_artifacts(
         bead_id=bead_id,
         status=EvidenceStatus.collected,
         for_bead_hash=canonical_hash_for_model(bead),
-        items=[EvidenceItem(name="cmd", evidence_type=EvidenceType.test_run, command="run", exit_code=0)],
+        items=[
+            EvidenceItem(
+                name="cmd", evidence_type=EvidenceType.test_run, command="run", exit_code=0
+            )
+        ],
     )
     write_model(paths.bead_path(bead_id), bead)
     write_model(paths.evidence_path(bead_id), evidence)
@@ -1717,7 +1761,9 @@ def test_spec_gate_rejects_openspec_ref_mismatch(tmp_path: Path) -> None:
     assert "OpenSpecRef mismatch" in result.notes
 
 
-def test_openspec_sync_writes_runs_openspec_ref(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_openspec_sync_writes_runs_openspec_ref(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from sdlc.io import Paths, write_model
 
     monkeypatch.chdir(tmp_path)
@@ -1805,13 +1851,9 @@ def test_abort_command_transitions_and_records_decision(
     assert decision_record.exit_code == 0
     assert decision_record.requested_transition is None
     assert decision_record.applied_transition is None
-    assert any(
-        link.artifact_id == entries[-1].artifact_id for link in decision_record.links
-    )
+    assert any(link.artifact_id == entries[-1].artifact_id for link in decision_record.links)
     assert transition_record.applied_transition == "in_progress -> aborted:needs-discovery"
-    assert any(
-        link.artifact_id == entries[-1].artifact_id for link in transition_record.links
-    )
+    assert any(link.artifact_id == entries[-1].artifact_id for link in transition_record.links)
 
 
 def test_abort_command_records_decision_even_if_transition_fails(
@@ -2046,7 +2088,9 @@ def test_boundary_violation_forces_abort_and_records_decision(
     assert "Engine-applied abort" in (transition_record.notes_md or "")
 
 
-def test_engine_abort_decision_type_scope_change(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_engine_abort_decision_type_scope_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from sdlc.engine import record_transition_attempt, request_transition
     from sdlc.io import Paths, load_decision_ledger, write_model
 
@@ -2164,7 +2208,9 @@ def test_policy_violation_record_helper(tmp_path: Path) -> None:
 
     paths = Paths(tmp_path)
     actor = Actor(kind="system", name="tester")
-    record = policy_violation_record("work-abc123", actor, "policy_violation: out-of-grounding access")
+    record = policy_violation_record(
+        "work-abc123", actor, "policy_violation: out-of-grounding access"
+    )
     write_execution_record(paths, record)
     records = load_execution_records(paths)
     assert records

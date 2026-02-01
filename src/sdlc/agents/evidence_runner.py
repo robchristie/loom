@@ -9,7 +9,15 @@ import hashlib
 
 from ..codec import sha256_canonical_json
 from ..io import Paths, ensure_parent, now_utc
-from ..models import AcceptanceCheck, Actor, EvidenceBundle, EvidenceItem, EvidenceType, FileRef, HashRef
+from ..models import (
+    AcceptanceCheck,
+    Actor,
+    EvidenceBundle,
+    EvidenceItem,
+    EvidenceType,
+    FileRef,
+    HashRef,
+)
 
 
 @dataclass(frozen=True)
@@ -74,7 +82,9 @@ def run_acceptance_checks_to_evidence(
         produced_paths.append(log_rel)
         commands_run.append(cmd_str)
 
-        attachments: List[FileRef] = [FileRef(path=log_rel, content_hash=_file_hash(paths, log_rel))]
+        attachments: List[FileRef] = [
+            FileRef(path=log_rel, content_hash=_file_hash(paths, log_rel))
+        ]
 
         # Include expected output file refs if they exist.
         for expected in check.expected_outputs:
@@ -115,7 +125,9 @@ def run_acceptance_checks_to_evidence(
         items=items,
     )
 
-    evidence_path.write_text(bundle.model_dump_json(indent=2) + "\n", encoding="utf-8")
+    from ..io import atomic_write_text
+
+    atomic_write_text(evidence_path, bundle.model_dump_json(indent=2) + "\n", encoding="utf-8")
     produced_paths.append(f"runs/{bead_id}/evidence.json")
 
     return EvidenceRunResult(

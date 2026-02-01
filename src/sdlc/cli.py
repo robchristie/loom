@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 from pathlib import Path
 import typer
 from pydantic import ValidationError
@@ -24,31 +23,11 @@ from .engine import (
 )
 from .io import Paths, git_head, git_is_dirty, load_bead, load_evidence, write_model
 from .models import Actor, BeadStatus, FileRef, GitRef, OpenSpecRef, RunPhase, schema_registry
+from .phase import phase_for_transition_str
 
 
 app = typer.Typer(add_completion=False)
 schema_app = typer.Typer(add_completion=False)
-
-
-def _phase_for_transition(transition: str) -> RunPhase:
-    """
-    Best-effort mapping from requested transition to RunPhase for journaling.
-    Keeps journal compliant with the Loom spec rule that phase reflects where the
-    request sits in the lifecycle (plan/implement/verify).
-    """
-    match = re.match(r"^\s*([^-\s>]+)\s*->\s*([^-\s>]+)\s*$", transition)
-    if not match:
-        return RunPhase.implement
-    to_status = match.group(2).strip()
-
-    if to_status in {"sized", "ready"}:
-        return RunPhase.plan
-    if to_status in {"in_progress", "verification_pending"}:
-        return RunPhase.implement
-    if to_status in {"verified", "approval_pending", "done"}:
-        return RunPhase.verify
-
-    return RunPhase.implement
 
 
 def _decision_action_phase(paths: Paths, bead_id: str) -> RunPhase:
@@ -112,7 +91,7 @@ def request(
     paths = Paths(Path.cwd())
     actor = Actor(kind=actor_kind, name=actor_name)  # type: ignore[arg-type]
     result = request_transition(paths, bead_id, transition, actor)
-    phase = _phase_for_transition(transition)
+    phase = phase_for_transition_str(transition)
     record_transition_attempt(paths, bead_id, phase, actor, transition, result)
     if not result.ok:
         raise typer.Exit(code=1)
@@ -225,7 +204,7 @@ def abort(
     record_transition_attempt(
         paths,
         bead_id,
-        _phase_for_transition(requested),
+        phase_for_transition_str(requested),
         actor,
         requested,
         result,
@@ -337,12 +316,15 @@ def agent_openspec_propose(
         settings=settings,
     )
 
+
 @agent_app.command("implement")
 def agent_implement(
     bead_id: str,
     actor_name: str = typer.Option(os.getenv("USER", "unknown"), "--actor-name"),
     auto_transition: bool = typer.Option(
-        False, "--auto-transition/--no-auto-transition", help="Request engine transitions as system actor"
+        False,
+        "--auto-transition/--no-auto-transition",
+        help="Request engine transitions as system actor",
     ),
 ) -> None:
     """Run implementation via codex-cli and journal the run."""
@@ -361,7 +343,9 @@ def agent_verify(
     bead_id: str,
     actor_name: str = typer.Option(os.getenv("USER", "unknown"), "--actor-name"),
     auto_transition: bool = typer.Option(
-        False, "--auto-transition/--no-auto-transition", help="Request engine transitions as system actor"
+        False,
+        "--auto-transition/--no-auto-transition",
+        help="Request engine transitions as system actor",
     ),
 ) -> None:
     """Run acceptance checks -> evidence bundle -> engine validation, then journal."""
